@@ -119,6 +119,12 @@
       "description": "S&P Global - Financial data and analytics skills including company tearsheets, earnings previews, and transaction summaries"
     },
     {
+      "name": "etoro",
+      "displayName": "eToro",
+      "source": "./plugins/partner-built/etoro",
+      "description": "eToro trading bot — market research, limit-order execution, stop-loss management, and daily trade journal generation for eToro demo and live accounts."
+    },
+    {
       "name": "claude-for-msft-365-install",
       "displayName": "Claude for Microsoft 365 Install",
       "source": "./claude-for-msft-365-install",
