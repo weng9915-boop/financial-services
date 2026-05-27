@@ -1,10 +1,19 @@
 {
   "name": "etoro",
-  "version": "1.0.0",
-  "description": "eToro trading bot — market research, limit-order execution, stop-loss management, and daily trade journal generation for eToro demo and live accounts.",
+  "version": "1.0.1",
+  "description": "eToro trading bot \u2014 market research, limit-order execution, stop-loss management, and daily trade journal generation for eToro demo and live accounts.",
   "author": {
     "name": "eToro"
   },
   "homepage": "https://www.etoro.com",
-  "keywords": ["etoro", "trading", "equities", "stocks", "portfolio", "stop-loss", "limit-order", "journal"]
+  "keywords": [
+    "etoro",
+    "trading",
+    "equities",
+    "stocks",
+    "portfolio",
+    "stop-loss",
+    "limit-order",
+    "journal"
+  ]
 }

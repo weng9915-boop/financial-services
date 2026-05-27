@@ -2,12 +2,11 @@
 eToro Trading Bot — daily runner.
 
 Usage:
-    python3 run_bot.py                  # full routine (research + trade + journal)
-    python3 run_bot.py --research-only  # skip trading, just log research
-    python3 run_bot.py --stoploss-only  # only run stop-loss scan
+    python run_bot.py                  # full routine (research + trade + journal)
+    python run_bot.py --research-only  # skip trading, just log research
+    python run_bot.py --stoploss-only  # only run stop-loss scan
 
-Required env vars: ETORO_API_KEY, ETORO_USER_KEY, ETORO_ENVIRONMENT
-Load with:  source ../.env && python3 run_bot.py
+Credentials are loaded automatically from the .env file in the repo root.
 """
 
 import argparse
@@ -20,6 +19,24 @@ from pathlib import Path
 
 # allow imports from the same scripts/ directory
 sys.path.insert(0, str(Path(__file__).parent))
+
+
+def _load_env():
+    """Load .env from repo root — works on Windows without source/export."""
+    env_path = Path(__file__).resolve().parents[3] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+        if key and not os.environ.get(key):   # don't overwrite existing env vars
+            os.environ[key] = val
+
+
+_load_env()
 
 import research
 import trade
