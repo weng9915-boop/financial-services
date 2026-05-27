@@ -1,0 +1,73 @@
+name: eToro Trading Bot
+
+on:
+  schedule:
+    # 9:45 AM ET on weekdays (UTC = ET + 4h in summer, + 5h in winter)
+    # Adjust the hour below for daylight saving:
+    #   Summer (EDT, UTC-4): 13:45 UTC
+    #   Winter (EST, UTC-5): 14:45 UTC
+    - cron: "45 13 * * 1-5"
+
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Bot mode"
+        required: true
+        default: "research-only"
+        type: choice
+        options:
+          - research-only
+          - stoploss-only
+          - full
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/partner-built/etoro/scripts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests urllib3
+
+      - name: Run bot (scheduled — full)
+        if: github.event_name == 'schedule'
+        env:
+          ETORO_API_KEY:     ${{ secrets.ETORO_API_KEY }}
+          ETORO_USER_KEY:    ${{ secrets.ETORO_USER_KEY }}
+          ETORO_ENVIRONMENT: ${{ secrets.ETORO_ENVIRONMENT }}
+        run: python3 run_bot.py
+
+      - name: Run bot (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ETORO_API_KEY:     ${{ secrets.ETORO_API_KEY }}
+          ETORO_USER_KEY:    ${{ secrets.ETORO_USER_KEY }}
+          ETORO_ENVIRONMENT: ${{ secrets.ETORO_ENVIRONMENT }}
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ "$MODE" = "research-only" ]; then
+            python3 run_bot.py --research-only
+          elif [ "$MODE" = "stoploss-only" ]; then
+            python3 run_bot.py --stoploss-only
+          else
+            python3 run_bot.py
+          fi
+
+      - name: Upload journal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trade-journal-${{ github.run_id }}
+          path: plugins/partner-built/etoro/scripts/journals/
+          if-no-files-found: ignore

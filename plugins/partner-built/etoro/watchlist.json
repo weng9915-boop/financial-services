@@ -1,0 +1,12 @@
+{
+  "_comment": "Add or remove tickers. The bot researches every symbol here each morning and trades only those with a bullish MA trend and non-negative news.",
+  "symbols": [
+    "NVDA",
+    "AAPL",
+    "MSFT",
+    "TSLA",
+    "AMZN"
+  ],
+  "trade_amount_usd": 500,
+  "max_daily_trades": 3
+}
