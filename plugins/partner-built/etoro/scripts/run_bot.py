@@ -204,17 +204,36 @@ def run(research_only: bool = False, stoploss_only: bool = False):
         return
 
     # 4. Research watchlist
+    # Build a set of instrument names/tickers already held to avoid re-buying
+    held_instruments = {
+        str(p.get("instrumentName", "")).upper()
+        for p in port_data.get("positions", [])
+    }
+    held_tickers = {
+        str(p.get("ticker", p.get("instrumentTicker", ""))).upper()
+        for p in port_data.get("positions", [])
+    }
+    already_held = held_instruments | held_tickers
+    if already_held:
+        log.info("Already holding positions in: %s", ", ".join(sorted(already_held)))
+
     research_rows = []
     for symbol in symbols:
         try:
             log.info("Researching %s ...", symbol)
             bundle = research.research_summary(symbol)
             ma     = bundle["moving_averages"]
-            bundle["decision"] = (
-                f"Buy ${amount:.0f}" if ma["trend"] == "bullish"
-                else "Hold — mixed trend" if ma["trend"] == "mixed"
-                else "Skip — bearish"
-            )
+
+            if symbol.upper() in already_held:
+                decision = "Hold — position already open"
+            elif ma["trend"] == "bullish":
+                decision = f"Buy ${amount:.0f}"
+            elif ma["trend"] == "mixed":
+                decision = "Hold — mixed trend"
+            else:
+                decision = "Skip — bearish"
+
+            bundle["decision"] = decision
             research_rows.append(bundle)
             log.info(
                 "  %s: close=$%s  MA20=$%s  MA50=$%s  trend=%s  → %s",
@@ -228,7 +247,7 @@ def run(research_only: bool = False, stoploss_only: bool = False):
         log.info("Research complete. Exiting (--research-only).")
         return
 
-    # 5. Trade execution — buy bullish symbols up to max_daily_trades
+    # 5. Trade execution — buy bullish symbols not already held, up to max_daily_trades
     trades_placed = []
     for row in research_rows:
         if len(trades_placed) >= max_trades:
@@ -236,9 +255,12 @@ def run(research_only: bool = False, stoploss_only: bool = False):
             break
         if row["moving_averages"]["trend"] != "bullish":
             continue
+        if row["symbol"].upper() in already_held:
+            log.info("Skipping %s — position already open.", row["symbol"])
+            continue
         try:
-            quote       = row["quote"]
-            ask         = float(quote.get("ask", quote.get("Ask", 0)))
+            quote         = row["quote"]
+            ask           = float(quote.get("ask", quote.get("Ask", 0)))
             instrument_id = row["instrument_id"]
 
             result = trade.place_order(

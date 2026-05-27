@@ -21,6 +21,9 @@ on:
           - stoploss-only
           - full
 
+# NOTE: GitHub Actions scheduled workflows only run from the DEFAULT BRANCH (main).
+# This file must be merged to main before the schedule trigger becomes active.
+
 jobs:
   trade:
     runs-on: ubuntu-latest
@@ -39,6 +42,27 @@ jobs:
 
       - name: Install dependencies
         run: pip install requests urllib3
+
+      # ---------------------------------------------------------------
+      # Static IP proxy — required because eToro's REST API enforces
+      # IP allowlisting and GitHub Actions IPs rotate constantly.
+      #
+      # Option A (recommended): Webshare proxy
+      #   1. Sign up at https://www.webshare.io (free tier available)
+      #   2. Get a static residential proxy: host, port, user, password
+      #   3. Add to GitHub secrets: PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_PASS
+      #   4. Add that proxy IP to your eToro API allowlist
+      #
+      # Option B: Skip proxy, run the bot locally instead (see README).
+      #   In that case, delete the "Set up proxy" step and remove
+      #   HTTPS_PROXY from the run steps below.
+      # ---------------------------------------------------------------
+      - name: Set up proxy
+        if: env.PROXY_HOST != ''
+        run: |
+          echo "HTTPS_PROXY=http://${{ secrets.PROXY_USER }}:${{ secrets.PROXY_PASS }}@${{ secrets.PROXY_HOST }}:${{ secrets.PROXY_PORT }}" >> $GITHUB_ENV
+        env:
+          PROXY_HOST: ${{ secrets.PROXY_HOST }}
 
       - name: Run bot (scheduled — full)
         if: github.event_name == 'schedule'
