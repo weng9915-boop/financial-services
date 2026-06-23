@@ -65,7 +65,7 @@ slLook      = input.int(10,  "Swing look-back for stop", minval = 1, group = gK)
 slBuf       = input.float(0.3, "Stop buffer (× ATR)", minval = 0.0, step = 0.1, group = gK)
 useForceExit= input.bool(false, "Force-exit if 1H trend flips", group = gK)
 costPerTrade= input.float(0.30, "Cost per trade (price units)", minval = 0.0, step = 0.05, group = gK)
-startTime   = input.time(timestamp(2024, 1, 1, 0, 0), "Backtest / signals start", group = gK)
+startTime   = input.time(timestamp("2024-01-01"), "Backtest / signals start", group = gK)
 
 gD = "⑦ Display"
 showDash    = input.bool(true, "Show dashboard", group = gD)

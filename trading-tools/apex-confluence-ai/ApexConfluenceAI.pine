@@ -28,7 +28,7 @@ useAdaptive  = input.bool(true,  "Adaptive: tighten after losing streak", group 
 adaptWindow  = input.int(20,     "Adaptive look-back (last N trades)", minval = 5, maxval = 200, group = gC)
 adaptStrength= input.float(3.0,  "Adaptive strength (0 = off)", minval = 0.0, step = 0.5, group = gC)
 costPerTrade = input.float(0.30, "Cost per trade (price units)", minval = 0.0, step = 0.05, group = gC)
-startTime    = input.time(timestamp(2024, 1, 1, 0, 0), "Backtest / signals start", group = gC)
+startTime    = input.time(timestamp("2024-01-01"), "Backtest / signals start", group = gC)
 
 gE = "② Trend & entry"
 emaFastLen   = input.int(21,  "EMA fast (pullback target)", minval = 1, group = gE)
