@@ -92,6 +92,7 @@ wSR=input.float(1.0,"S/R",minval=0,step=0.1,group=gW)
 gD = "⑧ Display"
 showDash   = input.bool(true, "Show dashboard", group = gD)
 dashPos    = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
+dashCompact= input.bool(true, "Compact minimap dashboard", group = gD)
 showZones  = input.bool(true, "Draw entry / SL / TP zones", group = gD)
 showSR     = input.bool(true, "Plot S/R staircase", group = gD)
 
@@ -302,8 +303,34 @@ f_vtxt(v) => v > 0 ? "▲" : v < 0 ? "▼" : "–"
 f_yn(b) => b ? "✓ YES" : "✗ NO"
 f_cc(b) => b ? color.new(color.green, 0) : color.new(color.red, 25)
 
-var table dash = table.new(f_pos(), 3, 24, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
-if showDash and barstate.islast
+var table dash = table.new(f_pos(), dashCompact ? 2 : 3, dashCompact ? 9 : 24, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+
+// --- Compact "minimap" HUD (tiny, glanceable) -------------------------------
+if showDash and barstate.islast and dashCompact
+    cW = color.white
+    cState = inTrade ? (posDir == 1 ? "● LONG" : "● SHORT") : takeTrade ? (longSetup ? "BUY" : "SELL") : "WAIT"
+    cCol = inTrade ? (posDir == 1 ? color.new(color.green, 20) : color.new(color.red, 20)) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 45)
+    table.cell(dash, 0, 0, "⚡APEX", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.tiny)
+    table.cell(dash, 1, 0, str.tostring(confidence) + "%", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.tiny)
+    table.cell(dash, 0, 1, "sig", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 1, cState, text_color = cW, bgcolor = cCol, text_size = size.tiny)
+    table.cell(dash, 0, 2, "go?", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 2, takeTrade ? "✔" + (longSetup ? "LONG" : "SHORT") : "✘ skip", text_color = cW, bgcolor = takeTrade ? color.new(color.green, 0) : color.new(color.red, 15), text_size = size.tiny)
+    table.cell(dash, 0, 3, "trend", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 3, lean == 1 ? "▲ up" : lean == -1 ? "▼ dn" : "–", text_color = cW, bgcolor = f_cc(cDir), text_size = size.tiny)
+    table.cell(dash, 0, 4, "pull", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 4, cPull ? "✓" : "✗", text_color = cW, bgcolor = f_cc(cPull), text_size = size.tiny)
+    table.cell(dash, 0, 5, "score", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 5, str.tostring(score, "#.#") + "/" + str.tostring(adaptThresh, "#.#"), text_color = score > 0 ? color.green : score < 0 ? color.red : color.gray, text_size = size.tiny)
+    table.cell(dash, 0, 6, "entry", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 6, str.tostring(inTrade ? entryP : close, "#.##"), text_color = cW, text_size = size.tiny)
+    table.cell(dash, 0, 7, "tp/sl", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 7, inTrade ? str.tostring(tpP, "#.#") + "/" + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.tiny)
+    table.cell(dash, 0, 8, "w%/pf", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
+    table.cell(dash, 1, 8, str.tostring(winRate, "#") + "%/" + str.tostring(profitF, "#.#"), text_color = winRate >= 50 ? color.green : color.red, text_size = size.tiny)
+
+// --- Full detail table ------------------------------------------------------
+if showDash and barstate.islast and not dashCompact
     txtW = color.white
     state = inTrade ? (posDir == 1 ? "● IN LONG" : "● IN SHORT") : takeTrade ? (longSetup ? "BUY now" : "SELL now") : "WAIT"
     stCol = inTrade ? (posDir == 1 ? color.new(color.green, 20) : color.new(color.red, 20)) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 40)
