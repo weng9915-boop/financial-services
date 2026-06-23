@@ -1,12 +1,33 @@
-# Apex Trend-Pullback AI (XAUUSD) — Pine v6
+# Apex trading tools (XAUUSD) — Pine v6
+
+### ⭐ Newest: `ApexMTFSniper.pine` — Apex MTF Sniper
+A multi-timeframe sniper built from proven reference indicators, fused into one
+locked signal:
+- **Entry** = **UT Bot** (ATR trailing stop) on your chart's timeframe (1m) — the
+  fakeout-filtered trigger.
+- **Direction** = **VIDYA** trend computed on **1H** in the background, shown on 1m
+  (longs only in a 1H uptrend).
+- **Momentum** = **Two-Pole Oscillator** on **1H**, shown on 1m (must be bullish
+  post change-of-character for longs).
+- **Fakeout filter** = RSI (with trend, not into exhaustion).
+- On confirmation it **LOCKS** Entry / SL (safer of UT-Bot trail or swing) / TP
+  (fixed 1:2) — levels never move. Non-repainting on closed bars.
+
+> The 1H trend + momentum are pulled onto your 1m chart so you never have to flip
+> timeframes. Uses an RSI fakeout filter rather than porting the full KDE-RSI engine.
+
+### Also in this folder
+- **`ApexConfluenceAI.pine`** — *Apex Trend-Pullback AI* (EMA-pullback model, below).
+- **`ApexConfluenceAI_Strategy.pine`** — the Strategy-Tester version of the pullback model.
+
+---
+
+## Apex Trend-Pullback AI
 
 A TradingView indicator + strategy that trades **with the trend**, enters on a
 **pullback to the fast EMA + a confirmation candle**, and manages risk with a
 **structure-based stop and a fixed 1:2 target** that is **locked at entry and
 never moves**. Built for XAUUSD (gold), 1-minute and intraday.
-
-> Files: [`ApexConfluenceAI.pine`](./ApexConfluenceAI.pine) (live indicator) ·
-> [`ApexConfluenceAI_Strategy.pine`](./ApexConfluenceAI_Strategy.pine) (Strategy Tester)
 
 ## Why v2 (what changed and why)
 v1 fired when a confluence **score crossed a threshold** — i.e. *after* the move
