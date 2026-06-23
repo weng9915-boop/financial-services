@@ -1,0 +1,397 @@
+//@version=6
+// =============================================================================
+//  APEX MTF SNIPER — STRATEGY  (UT Bot + 1H VIDYA + 1H Two-Pole + KDE-RSI)
+// -----------------------------------------------------------------------------
+//  The SAME logic as the Sniper indicator, routed through TradingView's Strategy
+//  Tester so you can measure the RISK-ADJUSTED reality: real fills, commission,
+//  slippage, equity curve, max-drawdown, profit factor — over thousands of trades.
+//
+//  ▸ This is a MEASUREMENT tool, not a better trader. Set Commission + Slippage
+//    in Settings ▸ Properties to your broker's real numbers or the results are
+//    fiction. Optimize in-sample, then validate on an UNSEEN range (see README).
+//  ▸ Judge it on profit factor + max-drawdown over 100+ trades, not the last few.
+//  ▸ KDE is compute-heavy; if it lags, lower "KDE bins". Not financial advice.
+// =============================================================================
+
+strategy("Apex MTF Sniper [Strategy]", "ApexSniper-S", overlay = true,
+     max_lines_count = 100, max_labels_count = 200, max_boxes_count = 60,
+     initial_capital = 10000, default_qty_type = strategy.fixed, default_qty_value = 1,
+     pyramiding = 0, commission_type = strategy.commission.cash_per_order, commission_value = 0.0,
+     slippage = 20, process_orders_on_close = true, calc_on_every_tick = false)
+
+// ============================== INPUTS =======================================
+gM = "① Multi-timeframe"
+htfRes      = input.timeframe("60", "Confirmation timeframe", group = gM)
+htfMode     = input.string("Balanced (debounce)", "1H read mode", options = ["Balanced (debounce)","Locked (1H close)","Early (live)"], group = gM)
+htfConfirm  = input.int(3, "Balanced: hold N bars", minval = 1, maxval = 60, group = gM)
+
+gP = "② Position sizing"
+riskMode    = input.string("Risk % equity", "Sizing mode", options = ["Risk % equity","Fixed contracts"], group = gP)
+riskPct     = input.float(1.0, "Risk % of equity per trade", minval = 0.1, step = 0.1, group = gP)
+fixedQty    = input.float(1.0, "Fixed contracts/oz", minval = 0.01, step = 0.01, group = gP)
+maxLeverage = input.float(30.0, "Max leverage cap (risk mode)", minval = 1.0, step = 1.0, group = gP)
+
+gU = "③ Entry — UT Bot"
+utKey       = input.float(1.0, "UT Bot key (sensitivity)", step = 0.1, group = gU)
+utAtrP      = input.int(10,    "UT Bot ATR period", minval = 1, group = gU)
+
+gV = "④ Direction — VIDYA (1H)"
+vidyaLen    = input.int(10, "VIDYA length", minval = 1, group = gV)
+vidyaMom    = input.int(20, "VIDYA momentum", minval = 1, group = gV)
+bandDist    = input.float(2.0, "Band distance", step = 0.1, group = gV)
+
+gT = "⑤ Momentum — Two-Pole (1H)"
+tpLen       = input.int(15, "Two-Pole length", minval = 1, group = gT)
+tpStrong    = input.bool(false, "Only enter while 2-Pole still early", group = gT)
+tpLevel     = input.float(0.0, "Early level (try 0.5)", step = 0.1, group = gT)
+
+gF = "⑥ Fakeout filters"
+useRsi      = input.bool(false, "Simple RSI filter", group = gF)
+rsiMid      = input.float(50, "  RSI midline", group = gF)
+rsiOB       = input.float(75, "  block longs above", group = gF)
+rsiOS       = input.float(25, "  block shorts below", group = gF)
+useKde      = input.bool(true, "KDE-RSI fakeout filter", group = gF)
+kdeMode     = input.string("Block opposite zone", "KDE mode", options = ["Block opposite zone","Require aligned zone"], group = gF)
+rsiLen      = input.int(14, "RSI length", minval = 1, group = gF)
+kdeKernel   = input.string("Gaussian", "KDE kernel", options = ["Uniform","Gaussian","Sigmoid"], group = gF)
+kdeBw       = input.float(2.71828, "KDE bandwidth", group = gF)
+kdeStep     = input.int(60, "KDE bins (lower = faster)", minval = 5, group = gF)
+kdeActStr   = input.string("Medium", "KDE activation", options = ["High","Medium","Low"], group = gF)
+kdePivLen   = input.int(21, "KDE pivot length", minval = 1, group = gF)
+
+gK = "⑦ Risk — locked SL / TP"
+rr          = input.float(2.0, "Reward : Risk (1 : X)", minval = 0.5, step = 0.1, group = gK)
+slMode      = input.string("Safer of UT & structure", "Stop basis", options = ["Safer of UT & structure","UT Bot trail","Swing structure"], group = gK)
+atrLen      = input.int(14,  "ATR length", minval = 1, group = gK)
+atrMult     = input.float(1.0, "Min stop = ATR ×", minval = 0.1, step = 0.1, group = gK)
+slLook      = input.int(10,  "Swing look-back for stop", minval = 1, group = gK)
+slBuf       = input.float(0.3, "Stop buffer (× ATR)", minval = 0.0, step = 0.1, group = gK)
+useForceExit= input.bool(false, "Force-exit if 1H trend flips", group = gK)
+
+gD = "⑧ Display"
+showDash    = input.bool(true, "Show dashboard", group = gD)
+dashPos     = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
+showZones   = input.bool(true, "Lock & draw entry/SL/TP zones", group = gD)
+showVidya   = input.bool(true, "Plot 1H VIDYA trend line", group = gD)
+showUt      = input.bool(true, "Plot UT Bot trail", group = gD)
+tintBg      = input.bool(true, "Tint background by 1H trend", group = gD)
+
+// ============================== ENTRY: UT BOT (chart TF) =====================
+xATR  = ta.atr(utAtrP)
+nLoss = utKey * xATR
+var float utTrail = 0.0
+utTrail := close > nz(utTrail[1]) and close[1] > nz(utTrail[1]) ? math.max(nz(utTrail[1]), close - nLoss) : close < nz(utTrail[1]) and close[1] < nz(utTrail[1]) ? math.min(nz(utTrail[1]), close + nLoss) : close > nz(utTrail[1]) ? close - nLoss : close + nLoss
+utBuy  = close > utTrail and ta.crossover(close, utTrail)
+utSell = close < utTrail and ta.crossunder(close, utTrail)
+
+rsi = ta.rsi(close, rsiLen)
+atr = ta.atr(atrLen)
+
+// ============================== 1H DIRECTION: VIDYA ==========================
+f_vidya() =>
+    float mom = ta.change(close)
+    float sp  = math.sum(mom >= 0 ? mom : 0.0, vidyaMom)
+    float sn  = math.sum(mom >= 0 ? 0.0 : -mom, vidyaMom)
+    float den = sp + sn
+    float cmo = den == 0 ? 0.0 : math.abs(100 * (sp - sn) / den)
+    float alpha = 2.0 / (vidyaLen + 1)
+    var float vid = 0.0
+    vid := alpha * cmo / 100 * close + (1 - alpha * cmo / 100) * nz(vid[1])
+    float v = ta.sma(vid, 15)
+    float atrv = ta.atr(200)
+    float ub = v + atrv * bandDist
+    float lb = v - atrv * bandDist
+    var bool up = false
+    if ta.crossover(close, ub)
+        up := true
+    if ta.crossunder(close, lb)
+        up := false
+    int ui = up ? 1 : 0
+    [ui, ui[1], v]
+
+[vUpLive, vUpConf, htfVidya] = request.security(syminfo.tickerid, htfRes, f_vidya(), lookahead = barmerge.lookahead_off)
+
+// ============================== 1H MOMENTUM: TWO-POLE ========================
+f_twopole() =>
+    float sma1   = ta.sma(close, 25)
+    float sd     = ta.stdev(close - sma1, 25)
+    float sma_n1 = sd == 0 ? 0.0 : ((close - sma1) - ta.sma(close - sma1, 25)) / sd
+    float alpha  = 2.0 / (tpLen + 1)
+    var float s1 = na
+    var float s2 = na
+    s1 := na(s1) ? sma_n1 : (1 - alpha) * s1 + alpha * sma_n1
+    s2 := na(s2) ? s1 : (1 - alpha) * s2 + alpha * s1
+    [s2, s2[4], s2[1], s2[5]]
+
+[tpLive, tppLive, tpConf, tppConf] = request.security(syminfo.tickerid, htfRes, f_twopole(), lookahead = barmerge.lookahead_off)
+
+// ============================== 1H MODE SELECTION ============================
+tUpLive = vUpLive == 1
+tUpConf = vUpConf == 1
+tBsDn   = ta.barssince(not tUpLive)
+tBsUp   = ta.barssince(tUpLive)
+tUpDeb  = tUpLive and (na(tBsDn) or tBsDn >= htfConfirm)
+tDnDeb  = not tUpLive and (na(tBsUp) or tBsUp >= htfConfirm)
+trendUp = htfMode == "Locked (1H close)" ? tUpConf : htfMode == "Early (live)" ? tUpLive : tUpDeb
+trendDn = htfMode == "Locked (1H close)" ? not tUpConf : htfMode == "Early (live)" ? not tUpLive : tDnDeb
+
+mUpLive = tpLive > tppLive
+mUpConf = tpConf > tppConf
+mBsDn   = ta.barssince(not mUpLive)
+mBsUp   = ta.barssince(mUpLive)
+mUpDeb  = mUpLive and (na(mBsDn) or mBsDn >= htfConfirm)
+mDnDeb  = not mUpLive and (na(mBsUp) or mBsUp >= htfConfirm)
+htfTPUp = htfMode == "Locked (1H close)" ? mUpConf : htfMode == "Early (live)" ? mUpLive : mUpDeb
+htfTPDn = htfMode == "Locked (1H close)" ? not mUpConf : htfMode == "Early (live)" ? not mUpLive : mDnDeb
+
+strongLong  = not tpStrong or tpLive < -tpLevel
+strongShort = not tpStrong or tpLive >  tpLevel
+
+// ============================== FAKEOUT: KDE-RSI =============================
+kdeAct = kdeActStr == "High" ? 0.4 : kdeActStr == "Medium" ? 0.25 : 0.15
+f_gauss(d, bw)   => 1.0 / math.sqrt(2.0 * math.pi) * math.pow(math.e, -0.5 * math.pow(d / bw, 2.0))
+f_unif(d, bw)    => math.abs(d) > bw ? 0.0 : 0.5
+f_sig(d, bw)     => 2.0 / math.pi * (1.0 / (math.pow(math.e, (d / bw)) + math.pow(math.e, -(d / bw))))
+
+f_kde(arr, kernel, bw, steps) =>
+    sz  = array.size(arr)
+    rng = array.range(arr)
+    mn  = array.min(arr)
+    sc  = rng / steps
+    dRange = array.new<float>(steps * 2)
+    for i = 0 to (steps * 2) - 1
+        array.set(dRange, i, mn + i * sc)
+    xArr = array.new<float>()
+    yArr = array.new<float>()
+    for i = 0 to array.size(dRange) - 1
+        float t = 0.0
+        for j = 0 to array.size(arr) - 1
+            float d = array.get(dRange, i) - array.get(arr, j)
+            t += kernel == "Gaussian" ? f_gauss(d, 1.0 / bw) : kernel == "Uniform" ? f_unif(d, 1.0 / bw) : f_sig(d, 1.0 / bw)
+        array.push(xArr, array.get(dRange, i))
+        array.push(yArr, 1.0 / sz * t)
+    [xArr, yArr]
+
+f_prefix(arr, l, r) => array.get(arr, r) - (l == 0 ? 0.0 : array.get(arr, l - 1))
+
+var array<float> KHX = na
+var array<float> KHY = na
+var array<float> KHYS = array.new<float>()
+var array<float> KLX = na
+var array<float> KLY = na
+var array<float> KLYS = array.new<float>()
+var array<float> hiRsi = array.new<float>()
+var array<float> loRsi = array.new<float>()
+
+kHiPiv = ta.pivothigh(kdePivLen, kdePivLen)
+kLoPiv = ta.pivotlow(kdePivLen, kdePivLen)
+
+if useKde and not na(kHiPiv)
+    if array.size(hiRsi) > 300
+        array.remove(hiRsi, 0)
+    array.push(hiRsi, rsi[kdePivLen])
+    [hx, hy] = f_kde(hiRsi, kdeKernel, kdeBw, kdeStep)
+    KHX := hx
+    KHY := hy
+    array.clear(KHYS)
+    float t = 0.0
+    for i = 0 to array.size(KHY) - 1
+        t += array.get(KHY, i)
+        array.push(KHYS, t)
+
+if useKde and not na(kLoPiv)
+    if array.size(loRsi) > 300
+        array.remove(loRsi, 0)
+    array.push(loRsi, rsi[kdePivLen])
+    [lx, ly] = f_kde(loRsi, kdeKernel, kdeBw, kdeStep)
+    KLX := lx
+    KLY := ly
+    array.clear(KLYS)
+    float t = 0.0
+    for i = 0 to array.size(KLY) - 1
+        t += array.get(KLY, i)
+        array.push(KLYS, t)
+
+float lowProb = na
+float highProb = na
+if useKde and last_bar_index - 5000 < bar_index
+    if array.size(hiRsi) > 0 and not na(KHX) and array.size(KHX) > 0
+        hL = math.max(0, math.min(array.binary_search_leftmost(KHX, rsi), array.size(KHX) - 1))
+        hR = math.max(0, math.min(array.binary_search_rightmost(KHX, rsi), array.size(KHX) - 1))
+        ni = math.abs(rsi - array.get(KHX, hL)) < math.abs(rsi - array.get(KHX, hR)) ? hL : hR
+        highProb := f_prefix(KHYS, 0, ni)
+    if array.size(loRsi) > 0 and not na(KLX) and array.size(KLX) > 0
+        lL = math.max(0, math.min(array.binary_search_leftmost(KLX, rsi), array.size(KLX) - 1))
+        lR = math.max(0, math.min(array.binary_search_rightmost(KLX, rsi), array.size(KLX) - 1))
+        ni = math.abs(rsi - array.get(KLX, lL)) < math.abs(rsi - array.get(KLX, lR)) ? lL : lR
+        lowProb := f_prefix(KLYS, ni, array.size(KLYS) - 1)
+
+kdeBull = false
+kdeBear = false
+if useKde and not na(KLY) and not na(KHY)
+    if not na(lowProb) and lowProb > array.sum(KLY) * (1.0 - kdeAct)
+        kdeBull := true
+    else if not na(highProb) and highProb > array.sum(KHY) * (1.0 - kdeAct)
+        kdeBear := true
+
+// ============================== FILTERS / RISK ===============================
+rsiOkLong   = not useRsi or (rsi > rsiMid and rsi < rsiOB)
+rsiOkShort  = not useRsi or (rsi < rsiMid and rsi > rsiOS)
+kdeOkLong   = not useKde or (kdeMode == "Require aligned zone" ? kdeBull : not kdeBear)
+kdeOkShort  = not useKde or (kdeMode == "Require aligned zone" ? kdeBear : not kdeBull)
+
+swingLo = ta.lowest(low, slLook)
+swingHi = ta.highest(high, slLook)
+slStructL = swingLo - atr * slBuf
+slStructH = swingHi + atr * slBuf
+slLongCalc  = slMode == "UT Bot trail" ? utTrail : slMode == "Swing structure" ? slStructL : math.min(utTrail, slStructL)
+slShortCalc = slMode == "UT Bot trail" ? utTrail : slMode == "Swing structure" ? slStructH : math.max(utTrail, slStructH)
+slLongCalc  := math.min(slLongCalc, close - atr * atrMult)
+slShortCalc := math.max(slShortCalc, close + atr * atrMult)
+riskLongCalc  = close - slLongCalc
+riskShortCalc = slShortCalc - close
+tpLongCalc  = close + rr * riskLongCalc
+tpShortCalc = close - rr * riskShortCalc
+
+// ============================== SETUP (all must agree) =======================
+longSetup  = trendUp and htfTPUp and strongLong  and utBuy  and rsiOkLong  and kdeOkLong
+shortSetup = trendDn and htfTPDn and strongShort and utSell and rsiOkShort and kdeOkShort
+
+// ============================== ORDERS =======================================
+flat = strategy.position_size == 0
+var float entryPx = na
+var int   dirX = 0
+var float slP = na
+var float tpP = na
+longEntry  = longSetup and flat
+shortEntry = shortSetup and flat
+
+if longEntry
+    risk = math.max(riskLongCalc, syminfo.mintick)
+    qty = riskMode == "Risk % equity" ? math.max(0.01, math.min((strategy.equity * riskPct / 100) / risk, (strategy.equity * maxLeverage) / close)) : fixedQty
+    strategy.entry("Long", strategy.long, qty = qty)
+    strategy.exit("Long X", from_entry = "Long", stop = slLongCalc, limit = tpLongCalc)
+    entryPx := close
+    dirX := 1
+    slP := slLongCalc
+    tpP := tpLongCalc
+if shortEntry
+    risk = math.max(riskShortCalc, syminfo.mintick)
+    qty = riskMode == "Risk % equity" ? math.max(0.01, math.min((strategy.equity * riskPct / 100) / risk, (strategy.equity * maxLeverage) / close)) : fixedQty
+    strategy.entry("Short", strategy.short, qty = qty)
+    strategy.exit("Short X", from_entry = "Short", stop = slShortCalc, limit = tpShortCalc)
+    entryPx := close
+    dirX := -1
+    slP := slShortCalc
+    tpP := tpShortCalc
+
+if useForceExit and strategy.position_size != 0 and (strategy.position_size > 0 ? trendDn : trendUp)
+    strategy.close_all(comment = "Force exit", alert_message = "APEX SNIPER FORCE EXIT " + syminfo.ticker)
+
+// ============================== ZONES ========================================
+var box   bxSL    = na
+var box   bxTP    = na
+var line  lnEnt   = na
+var label lbBadge = na
+var label lbSL    = na
+var label lbTP    = na
+if showZones and (longEntry or shortEntry)
+    if not na(bxSL)
+        box.delete(bxSL)
+    if not na(bxTP)
+        box.delete(bxTP)
+    if not na(lnEnt)
+        line.delete(lnEnt)
+    if not na(lbBadge)
+        label.delete(lbBadge)
+    if not na(lbSL)
+        label.delete(lbSL)
+    if not na(lbTP)
+        label.delete(lbTP)
+    int xR = bar_index + 3
+    bxSL := box.new(bar_index, math.max(entryPx, slP), xR, math.min(entryPx, slP), border_color = color.new(color.red, 50), bgcolor = color.new(color.red, 84))
+    bxTP := box.new(bar_index, math.max(entryPx, tpP), xR, math.min(entryPx, tpP), border_color = color.new(color.green, 50), bgcolor = color.new(color.green, 84))
+    lnEnt := line.new(bar_index, entryPx, xR, entryPx, color = color.new(color.blue, 0), width = 2, style = line.style_dashed)
+    lbBadge := label.new(bar_index, entryPx, (dirX == 1 ? "BUY 🔒 " : "SELL 🔒 ") + str.tostring(entryPx, "#.##"), style = dirX == 1 ? label.style_label_up : label.style_label_down, color = dirX == 1 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor = color.white, size = size.normal)
+    lbSL := label.new(xR, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.red, 10),   textcolor = color.white, size = size.small)
+    lbTP := label.new(xR, tpP, "TP " + str.tostring(tpP, "#.##"), style = label.style_label_left, color = color.new(color.green, 10), textcolor = color.white, size = size.small)
+else if showZones and strategy.position_size != 0 and not na(bxSL)
+    int xR = bar_index + 3
+    box.set_right(bxSL, xR)
+    box.set_right(bxTP, xR)
+    line.set_x2(lnEnt, xR)
+    label.set_x(lbSL, xR)
+    label.set_x(lbTP, xR)
+
+// ============================== STATS / DISPLAY ==============================
+pf  = strategy.grossloss != 0 ? strategy.grossprofit / strategy.grossloss : (strategy.grossprofit > 0 ? 999.0 : 0.0)
+wrt = strategy.closedtrades > 0 ? strategy.wintrades / strategy.closedtrades * 100 : 0.0
+longOpen  = strategy.position_size > 0
+shortOpen = strategy.position_size < 0
+takeTrade = longSetup or shortSetup
+
+// ============================== PLOTS ========================================
+plot(showVidya ? htfVidya : na, "1H VIDYA", color = tUpLive ? color.new(color.teal, 0) : color.new(color.maroon, 0), linewidth = 2, style = plot.style_linebr)
+plot(showUt ? utTrail : na, "UT Bot trail", color = color.new(color.gray, 35), style = plot.style_linebr)
+bgcolor(tintBg ? (tUpLive ? color.new(color.teal, 92) : color.new(color.maroon, 92)) : na, title = "1H trend tint")
+plotshape(longEntry,  "BUY",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.small)
+plotshape(shortEntry, "SELL", shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.small)
+
+// ============================== DASHBOARD ====================================
+f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+f_yn(b) => b ? "✓ YES" : "✗ no"
+f_cc(b) => b ? color.new(color.green, 0) : color.new(color.red, 25)
+biasDir = close > utTrail ? 1 : -1
+f_al(bull, bear) => biasDir == 1 ? bull : bear
+
+var table dash = table.new(f_pos(), 3, 16, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+if showDash and barstate.islast
+    txtW = color.white
+    utState = utBuy ? "BUY" : utSell ? "SELL" : close > utTrail ? "long bias" : "short bias"
+    kdeTxt  = kdeBull ? "bullish zone" : kdeBear ? "bearish zone" : "neutral"
+    state = longOpen ? "● IN LONG 🔒" : shortOpen ? "● IN SHORT 🔒" : takeTrade ? (longSetup ? "BUY now" : "SELL now") : "WAIT"
+    stCol = longOpen ? color.new(color.green, 20) : shortOpen ? color.new(color.red, 20) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 40)
+    table.cell(dash, 0, 0, "APEX SNIPER — STRATEGY", text_color = txtW, bgcolor = color.new(color.blue, 10))
+    table.merge_cells(dash, 0, 0, 2, 0)
+    table.cell(dash, 0, 1, "Signal", text_color = txtW, text_halign = text.align_left)
+    table.cell(dash, 1, 1, state, text_color = txtW, bgcolor = stCol)
+    table.cell(dash, 2, 1, htfMode == "Locked (1H close)" ? "1H:lock" : htfMode == "Early (live)" ? "1H:live" : "1H:bal", text_color = txtW)
+
+    table.cell(dash, 0, 2, "— CONFIRMATIONS —", text_color = txtW, bgcolor = color.new(color.gray, 60))
+    table.merge_cells(dash, 0, 2, 2, 2)
+    table.cell(dash, 0, 3, "1H Trend (VIDYA)", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 3, trendUp ? "UP" : trendDn ? "DOWN" : "—", text_color = txtW)
+    table.cell(dash, 2, 3, f_yn(f_al(trendUp, trendDn)), text_color = txtW, bgcolor = f_cc(f_al(trendUp, trendDn)))
+    table.cell(dash, 0, 4, "1H Mom (2-Pole)", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 4, str.tostring(tpLive, "#.##") + (htfTPUp ? " ▲" : " ▼"), text_color = htfTPUp ? color.green : color.red)
+    table.cell(dash, 2, 4, f_yn(f_al(htfTPUp, htfTPDn)), text_color = txtW, bgcolor = f_cc(f_al(htfTPUp, htfTPDn)))
+    table.cell(dash, 0, 5, "Entry (UT Bot)", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 5, utState, text_color = txtW)
+    table.cell(dash, 2, 5, f_yn(utBuy or utSell), text_color = txtW, bgcolor = f_cc(utBuy or utSell))
+    table.cell(dash, 0, 6, "Fakeout (KDE-RSI " + str.tostring(rsi, "#") + ")", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 6, useKde ? kdeTxt : "off", text_color = kdeBull ? color.green : kdeBear ? color.red : txtW)
+    table.cell(dash, 2, 6, f_yn(f_al(kdeOkLong, kdeOkShort)), text_color = txtW, bgcolor = f_cc(f_al(kdeOkLong, kdeOkShort)))
+    table.cell(dash, 0, 7, "VERDICT", text_color = txtW, bgcolor = color.new(color.blue, 20))
+    table.cell(dash, 1, 7, takeTrade ? "✔ TAKE " + (longSetup ? "LONG" : "SHORT") : "✘ SKIP", text_color = color.white, bgcolor = takeTrade ? color.new(color.green, 0) : color.new(color.red, 10))
+    table.merge_cells(dash, 1, 7, 2, 7)
+
+    table.cell(dash, 0, 8, "— LOCKED LEVELS —", text_color = txtW, bgcolor = color.new(color.gray, 60))
+    table.merge_cells(dash, 0, 8, 2, 8)
+    table.cell(dash, 0, 9, "Entry", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 9, strategy.position_size != 0 ? str.tostring(strategy.position_avg_price, "#.##") : "—", text_color = txtW)
+    table.cell(dash, 2, 9, "1:" + str.tostring(rr, "#.#"), text_color = color.gray)
+    table.cell(dash, 0, 10, "Target / Stop", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 10, strategy.position_size != 0 ? str.tostring(tpP, "#.##") : "—", text_color = color.green)
+    table.cell(dash, 2, 10, strategy.position_size != 0 ? str.tostring(slP, "#.##") : "—", text_color = color.red)
+
+    table.cell(dash, 0, 11, "— STRATEGY TESTER —", text_color = txtW, bgcolor = color.new(color.gray, 60))
+    table.merge_cells(dash, 0, 11, 2, 11)
+    table.cell(dash, 0, 12, "Net / Trades", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 12, str.tostring(strategy.netprofit, "#.#"), text_color = strategy.netprofit >= 0 ? color.green : color.red)
+    table.cell(dash, 2, 12, str.tostring(strategy.closedtrades), text_color = txtW)
+    table.cell(dash, 0, 13, "Win% / PF", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 13, str.tostring(wrt, "#.#") + "%", text_color = wrt >= 50 ? color.green : color.red)
+    table.cell(dash, 2, 13, str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red)
+    table.cell(dash, 0, 14, "Max drawdown", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 14, str.tostring(strategy.max_drawdown, "#.#"), text_color = color.red)
+    table.cell(dash, 2, 14, "set costs!", text_color = color.gray)

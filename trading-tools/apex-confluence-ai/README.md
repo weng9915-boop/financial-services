@@ -20,6 +20,10 @@ locked signal:
 > KDE is compute-heavy; if the chart lags, lower **KDE bins**.
 
 ### Also in this folder
+- **`ApexMTFSniper_Strategy.pine`** — the **Strategy-Tester** version of the Sniper
+  (same logic, real fills/commission/slippage, risk-% sizing, equity curve, drawdown).
+  Set Commission + Slippage in Properties, then judge it on profit factor + max-drawdown
+  over 100+ trades, in-sample → out-of-sample.
 - **`ApexConfluenceAI.pine`** — *Apex Trend-Pullback AI* (EMA-pullback model, below).
 - **`ApexConfluenceAI_Strategy.pine`** — the Strategy-Tester version of the pullback model.
 
