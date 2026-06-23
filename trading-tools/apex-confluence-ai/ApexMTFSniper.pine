@@ -1,73 +1,79 @@
 //@version=6
 // =============================================================================
 //  APEX MTF SNIPER  —  UT Bot entry + 1H VIDYA trend + 1H Two-Pole momentum
-//                      + RSI fakeout filter, with LOCKED entry / SL / TP.
+//                      + KDE-RSI fakeout filter, with LOCKED entry / SL / TP.
 // -----------------------------------------------------------------------------
-//  Built from the reference indicators you liked, fused into one signal:
-//   • ENTRY      = UT Bot (ATR trailing stop) on THIS chart's timeframe (e.g. 1m).
-//                  Faithful port of UT Bot Alerts — the fakeout-filtered trigger.
-//   • DIRECTION  = Volumatic VIDYA trend, computed on the 1H timeframe in the
-//                  background and shown on your 1m chart. Longs only in a 1H
-//                  uptrend, shorts only in a 1H downtrend.
-//   • MOMENTUM   = Two-Pole Oscillator, also 1H background, shown on 1m. Must be
-//                  bullish (post change-of-character) for longs, bearish for shorts.
-//   • FILTER     = RSI fakeout check (with trend, not into exhaustion).
-//   • RISK       = on confirmation it LOCKS Entry, SL (safer of UT-Bot trail or
-//                  swing structure) and TP (fixed 1:2). Levels never move after.
+//  Fused from the reference indicators you liked:
+//   • ENTRY      = UT Bot (ATR trailing stop) on THIS chart's timeframe (1m).
+//   • DIRECTION  = Volumatic VIDYA trend on 1H (background), shown on 1m.
+//   • MOMENTUM   = Two-Pole Oscillator on 1H (background), shown on 1m.
+//   • FAKEOUT    = KDE-optimised RSI (Flux-style kernel density on RSI pivots).
+//   • RISK       = on confirmation LOCKS Entry / SL (safer of UT trail or swing)
+//                  / TP (fixed 1:2). Levels never move after.
 //
-//  HONEST NOTES: signals fire on BAR CLOSE (no repaint on history). The 1H reads
-//  are non-repainting on closed 1H bars; the currently-forming 1H bar can still
-//  update until it closes (standard MTF behaviour — that's "as early as possible").
-//  No real ML / no news feed. Most gold feeds are tick volume. Not financial advice.
-//  RSI is used as the fakeout filter instead of porting the full KDE-RSI engine.
+//  1H MODE: "Balanced" reads the live 1H but DEBOUNCES it (must hold N bars) so
+//  it confirms within minutes yet won't flip-flop on a half-formed 1H candle.
+//  "Locked" uses only closed 1H bars (zero repaint). "Early" uses it live.
+//
+//  HONEST NOTES: signals fire on bar close. KDE is compute-heavy — if the chart
+//  is slow, lower "KDE bins". Not financial advice; tick volume on most gold feeds.
 // =============================================================================
 
-indicator("Apex MTF Sniper [UT+VIDYA+2Pole]", "ApexSniper", overlay = true,
+indicator("Apex MTF Sniper [UT+VIDYA+2Pole+KDE]", "ApexSniper", overlay = true,
      max_lines_count = 100, max_labels_count = 200, max_boxes_count = 60)
 
 // ============================== INPUTS =======================================
 gM = "① Multi-timeframe"
-htfRes   = input.timeframe("60", "Confirmation timeframe (trend & momentum)", group = gM, tooltip = "VIDYA trend + Two-Pole momentum run here (default 1H) and show on your 1m chart.")
+htfRes      = input.timeframe("60", "Confirmation timeframe", group = gM)
+htfMode     = input.string("Balanced (debounce)", "1H read mode", options = ["Balanced (debounce)","Locked (1H close)","Early (live)"], group = gM, tooltip = "Balanced = live 1H but must hold N bars. Locked = only closed 1H bars (no repaint). Early = live (can flicker).")
+htfConfirm  = input.int(3, "Balanced: hold N bars", minval = 1, maxval = 60, group = gM)
 
 gU = "② Entry — UT Bot"
-utKey    = input.float(1.0, "UT Bot key (sensitivity)", step = 0.1, group = gU)
-utAtrP   = input.int(10,    "UT Bot ATR period", minval = 1, group = gU)
+utKey       = input.float(1.0, "UT Bot key (sensitivity)", step = 0.1, group = gU)
+utAtrP      = input.int(10,    "UT Bot ATR period", minval = 1, group = gU)
 
 gV = "③ Direction — VIDYA (1H)"
-vidyaLen = input.int(10, "VIDYA length", minval = 1, group = gV)
-vidyaMom = input.int(20, "VIDYA momentum", minval = 1, group = gV)
-bandDist = input.float(2.0, "Band distance", step = 0.1, group = gV)
+vidyaLen    = input.int(10, "VIDYA length", minval = 1, group = gV)
+vidyaMom    = input.int(20, "VIDYA momentum", minval = 1, group = gV)
+bandDist    = input.float(2.0, "Band distance", step = 0.1, group = gV)
 
 gT = "④ Momentum — Two-Pole (1H)"
-tpLen    = input.int(15, "Two-Pole length", minval = 1, group = gT)
-tpStrong = input.bool(false, "Only enter while 2-Pole still early", group = gT, tooltip = "Long only while 1H Two-Pole is below the level (your 'strong buy under -0.5'); short above +level.")
-tpLevel  = input.float(0.0, "Early level (try 0.5)", step = 0.1, group = gT)
+tpLen       = input.int(15, "Two-Pole length", minval = 1, group = gT)
+tpStrong    = input.bool(false, "Only enter while 2-Pole still early", group = gT)
+tpLevel     = input.float(0.0, "Early level (try 0.5)", step = 0.1, group = gT)
 
-gR = "⑤ Fakeout filter — RSI"
-useRsi   = input.bool(true, "RSI fakeout filter", group = gR)
-rsiLen   = input.int(14, "RSI length", minval = 1, group = gR)
-rsiMid   = input.float(50, "Midline", group = gR)
-rsiOB    = input.float(75, "Block longs above", group = gR)
-rsiOS    = input.float(25, "Block shorts below", group = gR)
+gF = "⑤ Fakeout filters"
+useRsi      = input.bool(false, "Simple RSI filter", group = gF)
+rsiMid      = input.float(50, "  RSI midline", group = gF)
+rsiOB       = input.float(75, "  block longs above", group = gF)
+rsiOS       = input.float(25, "  block shorts below", group = gF)
+useKde      = input.bool(true, "KDE-RSI fakeout filter", group = gF)
+kdeMode     = input.string("Block opposite zone", "KDE mode", options = ["Block opposite zone","Require aligned zone"], group = gF)
+rsiLen      = input.int(14, "RSI length", minval = 1, group = gF)
+kdeKernel   = input.string("Gaussian", "KDE kernel", options = ["Uniform","Gaussian","Sigmoid"], group = gF)
+kdeBw       = input.float(2.71828, "KDE bandwidth", group = gF)
+kdeStep     = input.int(60, "KDE bins (lower = faster)", minval = 5, group = gF)
+kdeActStr   = input.string("Medium", "KDE activation", options = ["High","Medium","Low"], group = gF)
+kdePivLen   = input.int(21, "KDE pivot length", minval = 1, group = gF)
 
 gK = "⑥ Risk — locked SL / TP"
-rr       = input.float(2.0, "Reward : Risk (1 : X)", minval = 0.5, step = 0.1, group = gK)
-slMode   = input.string("Safer of UT & structure", "Stop basis", options = ["Safer of UT & structure","UT Bot trail","Swing structure"], group = gK)
-atrLen   = input.int(14,  "ATR length", minval = 1, group = gK)
-atrMult  = input.float(1.0, "Min stop = ATR ×", minval = 0.1, step = 0.1, group = gK)
-slLook   = input.int(10,  "Swing look-back for stop", minval = 1, group = gK)
-slBuf    = input.float(0.3, "Stop buffer (× ATR)", minval = 0.0, step = 0.1, group = gK)
-useForceExit = input.bool(false, "Force-exit if 1H trend flips (else pure SL/TP)", group = gK)
-costPerTrade = input.float(0.30, "Cost per trade (price units)", minval = 0.0, step = 0.05, group = gK)
-startTime    = input.time(timestamp(2024, 1, 1, 0, 0), "Backtest / signals start", group = gK)
+rr          = input.float(2.0, "Reward : Risk (1 : X)", minval = 0.5, step = 0.1, group = gK)
+slMode      = input.string("Safer of UT & structure", "Stop basis", options = ["Safer of UT & structure","UT Bot trail","Swing structure"], group = gK)
+atrLen      = input.int(14,  "ATR length", minval = 1, group = gK)
+atrMult     = input.float(1.0, "Min stop = ATR ×", minval = 0.1, step = 0.1, group = gK)
+slLook      = input.int(10,  "Swing look-back for stop", minval = 1, group = gK)
+slBuf       = input.float(0.3, "Stop buffer (× ATR)", minval = 0.0, step = 0.1, group = gK)
+useForceExit= input.bool(false, "Force-exit if 1H trend flips", group = gK)
+costPerTrade= input.float(0.30, "Cost per trade (price units)", minval = 0.0, step = 0.05, group = gK)
+startTime   = input.time(timestamp(2024, 1, 1, 0, 0), "Backtest / signals start", group = gK)
 
 gD = "⑦ Display"
-showDash  = input.bool(true, "Show dashboard", group = gD)
-dashPos   = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
-showZones = input.bool(true, "Lock & draw entry/SL/TP zones", group = gD)
-showVidya = input.bool(true, "Plot 1H VIDYA trend line", group = gD)
-showUt    = input.bool(true, "Plot UT Bot trail", group = gD)
-tintBg    = input.bool(true, "Tint background by 1H trend", group = gD)
+showDash    = input.bool(true, "Show dashboard", group = gD)
+dashPos     = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
+showZones   = input.bool(true, "Lock & draw entry/SL/TP zones", group = gD)
+showVidya   = input.bool(true, "Plot 1H VIDYA trend line", group = gD)
+showUt      = input.bool(true, "Plot UT Bot trail", group = gD)
+tintBg      = input.bool(true, "Tint background by 1H trend", group = gD)
 
 // ============================== ENTRY: UT BOT (chart TF) =====================
 xATR  = ta.atr(utAtrP)
@@ -99,33 +105,140 @@ f_vidya() =>
         up := true
     if ta.crossunder(close, lb)
         up := false
-    [up ? 1 : 0, v]
+    int ui = up ? 1 : 0
+    [ui, ui[1], v]
 
-[htfUpInt, htfVidya] = request.security(syminfo.tickerid, htfRes, f_vidya(), lookahead = barmerge.lookahead_off)
-htfTrendUp = htfUpInt == 1
-htfTrendDn = htfUpInt == 0
+[vUpLive, vUpConf, htfVidya] = request.security(syminfo.tickerid, htfRes, f_vidya(), lookahead = barmerge.lookahead_off)
 
 // ============================== 1H MOMENTUM: TWO-POLE ========================
 f_twopole() =>
     float sma1   = ta.sma(close, 25)
-    float sma_n1 = ((close - sma1) - ta.sma(close - sma1, 25)) / ta.stdev(close - sma1, 25)
+    float sd     = ta.stdev(close - sma1, 25)
+    float sma_n1 = sd == 0 ? 0.0 : ((close - sma1) - ta.sma(close - sma1, 25)) / sd
     float alpha  = 2.0 / (tpLen + 1)
     var float s1 = na
     var float s2 = na
     s1 := na(s1) ? sma_n1 : (1 - alpha) * s1 + alpha * sma_n1
     s2 := na(s2) ? s1 : (1 - alpha) * s2 + alpha * s1
-    [s2, s2[4]]
+    [s2, s2[4], s2[1], s2[5]]
 
-[htfTP, htfTPP] = request.security(syminfo.tickerid, htfRes, f_twopole(), lookahead = barmerge.lookahead_off)
-htfTPUp = htfTP > htfTPP
-htfTPDn = htfTP < htfTPP
+[tpLive, tppLive, tpConf, tppConf] = request.security(syminfo.tickerid, htfRes, f_twopole(), lookahead = barmerge.lookahead_off)
+
+// ============================== 1H MODE SELECTION ============================
+tUpLive = vUpLive == 1
+tUpConf = vUpConf == 1
+tBsDn   = ta.barssince(not tUpLive)
+tBsUp   = ta.barssince(tUpLive)
+tUpDeb  = tUpLive and (na(tBsDn) or tBsDn >= htfConfirm)
+tDnDeb  = not tUpLive and (na(tBsUp) or tBsUp >= htfConfirm)
+trendUp = htfMode == "Locked (1H close)" ? tUpConf : htfMode == "Early (live)" ? tUpLive : tUpDeb
+trendDn = htfMode == "Locked (1H close)" ? not tUpConf : htfMode == "Early (live)" ? not tUpLive : tDnDeb
+
+mUpLive = tpLive > tppLive
+mUpConf = tpConf > tppConf
+mBsDn   = ta.barssince(not mUpLive)
+mBsUp   = ta.barssince(mUpLive)
+mUpDeb  = mUpLive and (na(mBsDn) or mBsDn >= htfConfirm)
+mDnDeb  = not mUpLive and (na(mBsUp) or mBsUp >= htfConfirm)
+htfTPUp = htfMode == "Locked (1H close)" ? mUpConf : htfMode == "Early (live)" ? mUpLive : mUpDeb
+htfTPDn = htfMode == "Locked (1H close)" ? not mUpConf : htfMode == "Early (live)" ? not mUpLive : mDnDeb
+
+strongLong  = not tpStrong or tpLive < -tpLevel
+strongShort = not tpStrong or tpLive >  tpLevel
+
+// ============================== FAKEOUT: KDE-RSI =============================
+kdeAct = kdeActStr == "High" ? 0.4 : kdeActStr == "Medium" ? 0.25 : 0.15
+f_gauss(d, bw)   => 1.0 / math.sqrt(2.0 * math.pi) * math.pow(math.e, -0.5 * math.pow(d / bw, 2.0))
+f_unif(d, bw)    => math.abs(d) > bw ? 0.0 : 0.5
+f_sig(d, bw)     => 2.0 / math.pi * (1.0 / (math.pow(math.e, (d / bw)) + math.pow(math.e, -(d / bw))))
+
+f_kde(arr, kernel, bw, steps) =>
+    sz  = array.size(arr)
+    rng = array.range(arr)
+    mn  = array.min(arr)
+    sc  = rng / steps
+    dRange = array.new<float>(steps * 2)
+    for i = 0 to (steps * 2) - 1
+        array.set(dRange, i, mn + i * sc)
+    xArr = array.new<float>()
+    yArr = array.new<float>()
+    for i = 0 to array.size(dRange) - 1
+        float t = 0.0
+        for j = 0 to array.size(arr) - 1
+            float d = array.get(dRange, i) - array.get(arr, j)
+            t += kernel == "Gaussian" ? f_gauss(d, 1.0 / bw) : kernel == "Uniform" ? f_unif(d, 1.0 / bw) : f_sig(d, 1.0 / bw)
+        array.push(xArr, array.get(dRange, i))
+        array.push(yArr, 1.0 / sz * t)
+    [xArr, yArr]
+
+f_prefix(arr, l, r) => array.get(arr, r) - (l == 0 ? 0.0 : array.get(arr, l - 1))
+
+var array<float> KHX = na
+var array<float> KHY = na
+var array<float> KHYS = array.new<float>()
+var array<float> KLX = na
+var array<float> KLY = na
+var array<float> KLYS = array.new<float>()
+var array<float> hiRsi = array.new<float>()
+var array<float> loRsi = array.new<float>()
+
+kHiPiv = ta.pivothigh(kdePivLen, kdePivLen)
+kLoPiv = ta.pivotlow(kdePivLen, kdePivLen)
+
+if useKde and not na(kHiPiv)
+    if array.size(hiRsi) > 300
+        array.remove(hiRsi, 0)
+    array.push(hiRsi, rsi[kdePivLen])
+    [hx, hy] = f_kde(hiRsi, kdeKernel, kdeBw, kdeStep)
+    KHX := hx
+    KHY := hy
+    array.clear(KHYS)
+    float t = 0.0
+    for i = 0 to array.size(KHY) - 1
+        t += array.get(KHY, i)
+        array.push(KHYS, t)
+
+if useKde and not na(kLoPiv)
+    if array.size(loRsi) > 300
+        array.remove(loRsi, 0)
+    array.push(loRsi, rsi[kdePivLen])
+    [lx, ly] = f_kde(loRsi, kdeKernel, kdeBw, kdeStep)
+    KLX := lx
+    KLY := ly
+    array.clear(KLYS)
+    float t = 0.0
+    for i = 0 to array.size(KLY) - 1
+        t += array.get(KLY, i)
+        array.push(KLYS, t)
+
+float lowProb = na
+float highProb = na
+if useKde and last_bar_index - 5000 < bar_index
+    if array.size(hiRsi) > 0 and not na(KHX) and array.size(KHX) > 0
+        hL = math.max(0, math.min(array.binary_search_leftmost(KHX, rsi), array.size(KHX) - 1))
+        hR = math.max(0, math.min(array.binary_search_rightmost(KHX, rsi), array.size(KHX) - 1))
+        ni = math.abs(rsi - array.get(KHX, hL)) < math.abs(rsi - array.get(KHX, hR)) ? hL : hR
+        highProb := f_prefix(KHYS, 0, ni)
+    if array.size(loRsi) > 0 and not na(KLX) and array.size(KLX) > 0
+        lL = math.max(0, math.min(array.binary_search_leftmost(KLX, rsi), array.size(KLX) - 1))
+        lR = math.max(0, math.min(array.binary_search_rightmost(KLX, rsi), array.size(KLX) - 1))
+        ni = math.abs(rsi - array.get(KLX, lL)) < math.abs(rsi - array.get(KLX, lR)) ? lL : lR
+        lowProb := f_prefix(KLYS, ni, array.size(KLYS) - 1)
+
+kdeBull = false
+kdeBear = false
+if useKde and not na(KLY) and not na(KHY)
+    if not na(lowProb) and lowProb > array.sum(KLY) * (1.0 - kdeAct)
+        kdeBull := true
+    else if not na(highProb) and highProb > array.sum(KHY) * (1.0 - kdeAct)
+        kdeBear := true
 
 // ============================== FILTERS / RISK ===============================
 afterStart  = time >= startTime
 rsiOkLong   = not useRsi or (rsi > rsiMid and rsi < rsiOB)
 rsiOkShort  = not useRsi or (rsi < rsiMid and rsi > rsiOS)
-strongLong  = not tpStrong or htfTP < -tpLevel
-strongShort = not tpStrong or htfTP >  tpLevel
+kdeOkLong   = not useKde or (kdeMode == "Require aligned zone" ? kdeBull : not kdeBear)
+kdeOkShort  = not useKde or (kdeMode == "Require aligned zone" ? kdeBear : not kdeBull)
 
 swingLo = ta.lowest(low, slLook)
 swingHi = ta.highest(high, slLook)
@@ -141,8 +254,8 @@ tpLongCalc  = close + rr * riskLongCalc
 tpShortCalc = close - rr * riskShortCalc
 
 // ============================== SETUP (all must agree) =======================
-longSetup  = htfTrendUp and htfTPUp and strongLong  and utBuy  and rsiOkLong  and afterStart
-shortSetup = htfTrendDn and htfTPDn and strongShort and utSell and rsiOkShort and afterStart
+longSetup  = trendUp and htfTPUp and strongLong  and utBuy  and rsiOkLong  and kdeOkLong  and afterStart
+shortSetup = trendDn and htfTPDn and strongShort and utSell and rsiOkShort and kdeOkShort and afterStart
 
 // ============================== STATE MACHINE (LOCK levels) ==================
 var bool  inTrade = false
@@ -173,7 +286,7 @@ if barstate.isconfirmed
     if inTrade
         bool hitSL = posDir == 1 ? low  <= slP : high >= slP
         bool hitTP = posDir == 1 ? high >= tpP : low  <= tpP
-        bool invalid = useForceExit and (posDir == 1 ? htfTrendDn : htfTrendUp)
+        bool invalid = useForceExit and (posDir == 1 ? trendDn : trendUp)
         float exitPrice = na
         if hitSL
             exitPrice := slP
@@ -203,7 +316,6 @@ if barstate.isconfirmed
         longSignal  := longSetup
         shortSignal := shortSetup
 
-    // lock & draw the zone at entry; attach to price; freeze on exit
     if showZones and (longSignal or shortSignal)
         if not na(bxSL)
             box.delete(bxSL)
@@ -240,9 +352,9 @@ netPts    = grossW - grossL
 takeTrade = longSetup or shortSetup
 
 // ============================== PLOTS ========================================
-plot(showVidya ? htfVidya : na, "1H VIDYA", color = htfTrendUp ? color.new(color.teal, 0) : color.new(color.maroon, 0), linewidth = 2, style = plot.style_linebr)
+plot(showVidya ? htfVidya : na, "1H VIDYA", color = tUpLive ? color.new(color.teal, 0) : color.new(color.maroon, 0), linewidth = 2, style = plot.style_linebr)
 plot(showUt ? utTrail : na, "UT Bot trail", color = color.new(color.gray, 35), style = plot.style_linebr)
-bgcolor(tintBg ? (htfTrendUp ? color.new(color.teal, 92) : color.new(color.maroon, 92)) : na, title = "1H trend tint")
+bgcolor(tintBg ? (tUpLive ? color.new(color.teal, 92) : color.new(color.maroon, 92)) : na, title = "1H trend tint")
 plotshape(longSignal,  "BUY",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.small)
 plotshape(shortSignal, "SELL", shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.small)
 plotshape(forceExitFlag, "FORCE EXIT", shape.xcross, location.abovebar, color.new(color.fuchsia, 0), text = "EXIT", textcolor = color.white, size = size.tiny)
@@ -256,32 +368,33 @@ f_cc(b) => b ? color.new(color.green, 0) : color.new(color.red, 25)
 biasDir = close > utTrail ? 1 : -1
 f_al(bull, bear) => biasDir == 1 ? bull : bear
 
-var table dash = table.new(f_pos(), 3, 14, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+var table dash = table.new(f_pos(), 3, 16, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 if showDash and barstate.islast
     txtW = color.white
     utState = utBuy ? "BUY" : utSell ? "SELL" : close > utTrail ? "long bias" : "short bias"
+    kdeTxt  = kdeBull ? "bullish zone" : kdeBear ? "bearish zone" : "neutral"
     state = inTrade ? (posDir == 1 ? "● IN LONG 🔒" : "● IN SHORT 🔒") : takeTrade ? (longSetup ? "BUY now" : "SELL now") : "WAIT"
     stCol = inTrade ? (posDir == 1 ? color.new(color.green, 20) : color.new(color.red, 20)) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 40)
     table.cell(dash, 0, 0, "APEX MTF SNIPER", text_color = txtW, bgcolor = color.new(color.blue, 10))
     table.merge_cells(dash, 0, 0, 2, 0)
     table.cell(dash, 0, 1, "Signal", text_color = txtW, text_halign = text.align_left)
     table.cell(dash, 1, 1, state, text_color = txtW, bgcolor = stCol)
-    table.cell(dash, 2, 1, "UT " + utState, text_color = txtW)
+    table.cell(dash, 2, 1, htfMode == "Locked (1H close)" ? "1H:lock" : htfMode == "Early (live)" ? "1H:live" : "1H:bal", text_color = txtW)
 
     table.cell(dash, 0, 2, "— CONFIRMATIONS —", text_color = txtW, bgcolor = color.new(color.gray, 60))
     table.merge_cells(dash, 0, 2, 2, 2)
     table.cell(dash, 0, 3, "1H Trend (VIDYA)", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 3, htfTrendUp ? "UP" : "DOWN", text_color = txtW)
-    table.cell(dash, 2, 3, f_yn(f_al(htfTrendUp, htfTrendDn)), text_color = txtW, bgcolor = f_cc(f_al(htfTrendUp, htfTrendDn)))
+    table.cell(dash, 1, 3, trendUp ? "UP" : trendDn ? "DOWN" : "—", text_color = txtW)
+    table.cell(dash, 2, 3, f_yn(f_al(trendUp, trendDn)), text_color = txtW, bgcolor = f_cc(f_al(trendUp, trendDn)))
     table.cell(dash, 0, 4, "1H Mom (2-Pole)", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 4, str.tostring(htfTP, "#.##") + (htfTPUp ? " ▲" : " ▼"), text_color = htfTPUp ? color.green : color.red)
+    table.cell(dash, 1, 4, str.tostring(tpLive, "#.##") + (htfTPUp ? " ▲" : " ▼"), text_color = htfTPUp ? color.green : color.red)
     table.cell(dash, 2, 4, f_yn(f_al(htfTPUp, htfTPDn)), text_color = txtW, bgcolor = f_cc(f_al(htfTPUp, htfTPDn)))
     table.cell(dash, 0, 5, "Entry (UT Bot)", text_color = color.gray, text_halign = text.align_left)
     table.cell(dash, 1, 5, utState, text_color = txtW)
     table.cell(dash, 2, 5, f_yn(utBuy or utSell), text_color = txtW, bgcolor = f_cc(utBuy or utSell))
-    table.cell(dash, 0, 6, "RSI filter (" + str.tostring(rsi, "#") + ")", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 6, useRsi ? "on" : "off", text_color = txtW)
-    table.cell(dash, 2, 6, f_yn(f_al(rsiOkLong, rsiOkShort)), text_color = txtW, bgcolor = f_cc(f_al(rsiOkLong, rsiOkShort)))
+    table.cell(dash, 0, 6, "Fakeout (KDE-RSI " + str.tostring(rsi, "#") + ")", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 6, useKde ? kdeTxt : "off", text_color = kdeBull ? color.green : kdeBear ? color.red : txtW)
+    table.cell(dash, 2, 6, f_yn(f_al(kdeOkLong, kdeOkShort)), text_color = txtW, bgcolor = f_cc(f_al(kdeOkLong, kdeOkShort)))
     table.cell(dash, 0, 7, "VERDICT", text_color = txtW, bgcolor = color.new(color.blue, 20))
     table.cell(dash, 1, 7, takeTrade ? "✔ TAKE " + (longSetup ? "LONG" : "SHORT") : "✘ SKIP", text_color = color.white, bgcolor = takeTrade ? color.new(color.green, 0) : color.new(color.red, 10))
     table.merge_cells(dash, 1, 7, 2, 7)

@@ -9,12 +9,15 @@ locked signal:
   (longs only in a 1H uptrend).
 - **Momentum** = **Two-Pole Oscillator** on **1H**, shown on 1m (must be bullish
   post change-of-character for longs).
-- **Fakeout filter** = RSI (with trend, not into exhaustion).
+- **Fakeout filter** = **KDE-optimised RSI** (Flux-style kernel-density on RSI
+  pivots) — blocks entries into the statistical reversal zone. Simple RSI also available.
 - On confirmation it **LOCKS** Entry / SL (safer of UT-Bot trail or swing) / TP
   (fixed 1:2) — levels never move. Non-repainting on closed bars.
 
-> The 1H trend + momentum are pulled onto your 1m chart so you never have to flip
-> timeframes. Uses an RSI fakeout filter rather than porting the full KDE-RSI engine.
+> The 1H trend + momentum are pulled onto your 1m chart so you never flip timeframes.
+> **1H read mode**: *Balanced* (live but must hold N bars — fast, no flip-flop),
+> *Locked* (closed 1H bars only — zero repaint), or *Early* (live, can flicker).
+> KDE is compute-heavy; if the chart lags, lower **KDE bins**.
 
 ### Also in this folder
 - **`ApexConfluenceAI.pine`** — *Apex Trend-Pullback AI* (EMA-pullback model, below).
