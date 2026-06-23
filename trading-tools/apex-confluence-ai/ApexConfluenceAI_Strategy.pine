@@ -1,97 +1,73 @@
 //@version=6
 // =============================================================================
-//  APEX CONFLUENCE AI — STRATEGY / OPTIMIZATION COMPANION  (XAUUSD)
+//  APEX TREND-PULLBACK AI — STRATEGY  (XAUUSD, v2: trend-aligned, fixed 1:2)
 // -----------------------------------------------------------------------------
-//  Same 12-factor confluence engine as the indicator, but routed through
-//  TradingView's STRATEGY TESTER so you can backtest with real fills,
-//  commission, slippage, an equity curve, max-drawdown, and — crucially —
-//  OPTIMIZE inputs and validate them out-of-sample.
+//  Same engine as the indicator, routed through TradingView's STRATEGY TESTER
+//  so you can backtest/optimize with real fills, commission, slippage, equity
+//  curve and drawdown. Trade model: WITH the trend → pullback to fast EMA →
+//  confirmation candle → structure stop + FIXED 1:2 target, locked at entry.
 //
-//  ▸ Performance stats come from the Strategy Tester panel (bottom of screen),
-//    not from me. Those are real simulated fills, not a hand-rolled estimate.
-//  ▸ COSTS ARE NOT FANTASY ONLY IF YOU SET THEM: open Settings ▸ Properties and
-//    set Commission + Slippage to YOUR broker's real numbers before trusting a
-//    single result. The defaults below are a gold-ish placeholder.
-//  ▸ HONEST OPTIMIZATION (see README): tune on one date range, then VALIDATE on
-//    a different unseen range. A backtest you optimized and then admired on the
-//    same data is curve-fitting — it will not survive live, least of all in a
-//    geopolitical-shock regime. Optimize for ROBUSTNESS (a broad plateau of
-//    decent settings), not the single prettiest peak.
-//  ▸ NOT FINANCIAL ADVICE. Forward-test on demo first.
+//  ▸ Set Commission + Slippage in Settings ▸ Properties to your broker's real
+//    numbers before trusting results. Optimize in-sample, then VALIDATE on an
+//    unseen range (see README). Not financial advice.
 // =============================================================================
 
-strategy("Apex Confluence AI [Strategy]", "ApexAI-S", overlay = true,
-     max_lines_count = 200, max_labels_count = 500,
-     initial_capital = 10000,
-     default_qty_type = strategy.fixed, default_qty_value = 1,
-     pyramiding = 0,
-     commission_type = strategy.commission.cash_per_order, commission_value = 0.0,
-     slippage = 20,                       // ticks; ≈0.20 on a 0.01-tick gold feed — SET YOUR REAL VALUE in Properties
-     process_orders_on_close = true,      // fills on bar close → matches the non-repaint signal logic
-     calc_on_every_tick = false)
+strategy("Apex Trend-Pullback AI [Strategy]", "ApexTP-S", overlay = true,
+     max_lines_count = 100, max_labels_count = 200, max_boxes_count = 60,
+     initial_capital = 10000, default_qty_type = strategy.fixed, default_qty_value = 1,
+     pyramiding = 0, commission_type = strategy.commission.cash_per_order, commission_value = 0.0,
+     slippage = 20, process_orders_on_close = true, calc_on_every_tick = false)
 
 // ============================== INPUTS =======================================
-gC = "① Core / Signal"
-sigThresh    = input.float(4.0,  "Base confluence threshold", minval = 1.0, step = 0.5, group = gC)
-useAdaptive  = input.bool(true,  "Adaptive threshold (learn from recent win-rate)", group = gC)
+gC = "① Core"
+rr           = input.float(2.0,  "Reward : Risk  (1 : X)", minval = 0.5, step = 0.1, group = gC)
+sigThresh    = input.float(2.5,  "Min confluence score (confirm)", minval = 0.0, step = 0.5, group = gC)
+useAdaptive  = input.bool(true,  "Adaptive: tighten after losing streak", group = gC)
 adaptWindow  = input.int(20,     "Adaptive look-back (last N trades)", minval = 5, maxval = 200, group = gC)
-adaptStrength= input.float(4.0,  "Adaptive strength (0 = off)", minval = 0.0, step = 0.5, group = gC)
-rrRatio      = input.float(1.5,  "TP1 = risk × (target the engine trades)", minval = 0.3, step = 0.1, group = gC)
-
-gChk = "✅ Pre-trade checklist (hard gate)"
-useChecklist = input.bool(true,  "Enforce 3-question checklist (ANY no = SKIP)", group = gChk)
-chkTrend     = input.bool(true,  "1) Trade WITH the day's trend only", group = gChk, tooltip = "Up day → longs only, down day → shorts only.")
-allowReversal= input.bool(false, "    ↳ allow counter-trend on strong reversal (CHoCH)", group = gChk)
-revStrength  = input.float(0.8,  "    ↳ reversal needs |score| ≥ maxScore ×", minval = 0.5, maxval = 1.0, step = 0.05, group = gChk)
-chkLevel     = input.bool(true,  "2) Enter only AT a level (not mid-chop)", group = gChk, tooltip = "Price must sit at S/R, VWAP, or a round number.")
-levelAtr     = input.float(0.5,  "    ↳ 'at level' distance (× ATR)", minval = 0.1, step = 0.1, group = gChk)
-roundStep    = input.float(5.0,  "    ↳ round-number grid ($, 0 = off)", minval = 0.0, step = 0.5, group = gChk)
+adaptStrength= input.float(3.0,  "Adaptive strength (0 = off)", minval = 0.0, step = 0.5, group = gC)
 
 gP = "② Position sizing"
 riskMode     = input.string("Risk % equity", "Sizing mode", options = ["Risk % equity","Fixed contracts"], group = gP)
 riskPct      = input.float(1.0,  "Risk % of equity per trade", minval = 0.1, step = 0.1, group = gP)
 fixedQty     = input.float(1.0,  "Fixed contracts/oz", minval = 0.01, step = 0.01, group = gP)
-maxLeverage  = input.float(30.0, "Max leverage cap (risk mode)", minval = 1.0, step = 1.0, group = gP,
-     tooltip = "Caps position notional at equity × this, so risk-sizing can't ask for an impossible size.")
+maxLeverage  = input.float(30.0, "Max leverage cap (risk mode)", minval = 1.0, step = 1.0, group = gP)
 
-gT = "③ Trend"
-emaFastLen   = input.int(21,  "EMA fast",  minval = 1, group = gT)
-emaSlowLen   = input.int(50,  "EMA slow",  minval = 1, group = gT)
-emaBiasLen   = input.int(200, "EMA bias (long-term)", minval = 1, group = gT)
-requireBias  = input.bool(true, "Require price on bias-EMA side", group = gT)
-useHTF       = input.bool(true, "Higher-timeframe trend filter", group = gT)
-htfRes       = input.timeframe("15", "Higher timeframe", group = gT)
+gE = "③ Trend & entry"
+emaFastLen   = input.int(21,  "EMA fast (pullback target)", minval = 1, group = gE)
+emaSlowLen   = input.int(50,  "EMA slow", minval = 1, group = gE)
+emaBiasLen   = input.int(200, "EMA bias (long-term)", minval = 1, group = gE)
+useHTF       = input.bool(true, "Higher-timeframe trend filter", group = gE)
+htfRes       = input.timeframe("15", "Higher timeframe", group = gE)
+useDayBias   = input.bool(true, "Trade with the day's direction only", group = gE)
+pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
+pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
 
-gM = "④ Momentum / Volume"
-rsiLen       = input.int(14, "RSI length", minval = 1, group = gM)
-macdFast     = input.int(12, "MACD fast",  minval = 1, group = gM)
-macdSlow     = input.int(26, "MACD slow",  minval = 1, group = gM)
-macdSig      = input.int(9,  "MACD signal",minval = 1, group = gM)
-stochLen     = input.int(14, "Stoch length", minval = 1, group = gM)
-adxLen       = input.int(14, "ADX/DMI length", minval = 1, group = gM)
-adxMin       = input.float(20, "ADX min (trend-strength gate)", minval = 0, group = gM)
-volLen       = input.int(20, "Volume avg length", minval = 1, group = gM)
-volThresh    = input.float(1.2, "Rel-volume confirm (× avg)", minval = 0.1, step = 0.1, group = gM)
+gStop = "④ Stop & target (structure)"
+atrLen       = input.int(14,  "ATR length", minval = 1, group = gStop)
+atrMult      = input.float(1.0, "Min stop = ATR ×", minval = 0.1, step = 0.1, group = gStop)
+slLook       = input.int(10,  "Swing look-back for stop", minval = 1, group = gStop)
+slBuf        = input.float(0.3, "Stop buffer beyond swing (× ATR)", minval = 0.0, step = 0.1, group = gStop)
+useForceExit = input.bool(false, "Force-exit if trend flips (else pure SL/TP)", group = gStop)
 
-gV = "⑤ Volatility / Stops"
-atrLen       = input.int(14,  "ATR length", minval = 1, group = gV)
-atrMult      = input.float(1.5, "Stop = ATR ×", minval = 0.1, step = 0.1, group = gV)
-bbLen        = input.int(20,  "Bollinger length", minval = 1, group = gV)
-bbMult       = input.float(2.0,"Bollinger mult", minval = 0.1, step = 0.1, group = gV)
-stFactor     = input.float(3.0,"Supertrend factor", minval = 0.1, step = 0.1, group = gV)
-stAtr        = input.int(10,  "Supertrend ATR", minval = 1, group = gV)
+gConf = "⑤ Confirmation indicators (score)"
+rsiLen       = input.int(14, "RSI length", minval = 1, group = gConf)
+macdFast     = input.int(12, "MACD fast",  minval = 1, group = gConf)
+macdSlow     = input.int(26, "MACD slow",  minval = 1, group = gConf)
+macdSig      = input.int(9,  "MACD signal",minval = 1, group = gConf)
+stochLen     = input.int(14, "Stoch length", minval = 1, group = gConf)
+adxLen       = input.int(14, "ADX/DMI length", minval = 1, group = gConf)
+adxMin       = input.float(18, "ADX min", minval = 0, group = gConf)
+volLen       = input.int(20, "Volume avg length", minval = 1, group = gConf)
+volThresh    = input.float(1.1, "Rel-volume confirm (× avg)", minval = 0.1, step = 0.1, group = gConf)
+bbLen        = input.int(20,  "Bollinger length", minval = 1, group = gConf)
+bbMult       = input.float(2.0,"Bollinger mult", minval = 0.1, step = 0.1, group = gConf)
+stFactor     = input.float(3.0,"Supertrend factor", minval = 0.1, step = 0.1, group = gConf)
+stAtr        = input.int(10,  "Supertrend ATR", minval = 1, group = gConf)
+pivLeft      = input.int(10, "Pivot left",  minval = 1, group = gConf)
+pivRight     = input.int(5,  "Pivot right", minval = 1, group = gConf)
+srAtr        = input.float(0.6, "S/R proximity (× ATR)", minval = 0.1, step = 0.1, group = gConf)
 
-gS = "⑥ Structure (S/R)"
-pivLeft      = input.int(10, "Pivot left",  minval = 1, group = gS)
-pivRight     = input.int(5,  "Pivot right (confirm lag)", minval = 1, group = gS)
-srAtrMult    = input.float(0.6, "S/R proximity (× ATR)", minval = 0.1, step = 0.1, group = gS)
-
-gF = "⑦ Force-Exit / Invalidation"
-useForceExit = input.bool(true, "Enable force-exit on invalidation", group = gF)
-exitOnTrend  = input.bool(true, "Exit if price crosses slow-EMA against trade", group = gF)
-exitOnScore  = input.float(0.6, "Exit if opposite score ≥ threshold ×", minval = 0.1, maxval = 1.0, step = 0.1, group = gF)
-
-gN = "⑧ Sessions / News blackout"
+gN = "⑥ Sessions / News blackout"
 tz           = input.string("GMT", "Timezone", group = gN)
 useSession   = input.bool(false, "Only trade inside session", group = gN)
 tradeSess    = input.session("0000-2359", "Trading session", group = gN)
@@ -99,35 +75,27 @@ useNews      = input.bool(true, "Mute signals during news windows", group = gN)
 news1        = input.session("1230-1400", "News blackout #1", group = gN)
 news2        = input.session("1800-1900", "News blackout #2", group = gN)
 
-gW = "⑨ Factor weights"
-wEma   = input.float(1.5, "EMA fast/slow", minval = 0, step = 0.1, group = gW)
-wBias  = input.float(1.0, "EMA bias",      minval = 0, step = 0.1, group = gW)
-wHtf   = input.float(1.5, "HTF trend",     minval = 0, step = 0.1, group = gW)
-wAdx   = input.float(1.0, "ADX/DMI",       minval = 0, step = 0.1, group = gW)
-wRsi   = input.float(1.0, "RSI",           minval = 0, step = 0.1, group = gW)
-wMacd  = input.float(1.0, "MACD",          minval = 0, step = 0.1, group = gW)
-wStoch = input.float(0.5, "Stochastic",    minval = 0, step = 0.1, group = gW)
-wVol   = input.float(1.0, "Volume",        minval = 0, step = 0.1, group = gW)
-wVwap  = input.float(1.0, "VWAP",          minval = 0, step = 0.1, group = gW)
-wSt    = input.float(1.5, "Supertrend",    minval = 0, step = 0.1, group = gW)
-wBb    = input.float(0.5, "Bollinger",     minval = 0, step = 0.1, group = gW)
-wSR    = input.float(1.0, "Support/Resist",minval = 0, step = 0.1, group = gW)
+gW = "⑦ Factor weights (score)"
+wEma=input.float(1.5,"EMA fast/slow",minval=0,step=0.1,group=gW)
+wBias=input.float(1.0,"EMA bias",minval=0,step=0.1,group=gW)
+wHtf=input.float(1.5,"HTF trend",minval=0,step=0.1,group=gW)
+wAdx=input.float(1.0,"ADX/DMI",minval=0,step=0.1,group=gW)
+wRsi=input.float(1.0,"RSI",minval=0,step=0.1,group=gW)
+wMacd=input.float(1.0,"MACD",minval=0,step=0.1,group=gW)
+wStoch=input.float(0.5,"Stochastic",minval=0,step=0.1,group=gW)
+wVol=input.float(1.0,"Volume",minval=0,step=0.1,group=gW)
+wVwap=input.float(1.0,"VWAP",minval=0,step=0.1,group=gW)
+wSt=input.float(1.5,"Supertrend",minval=0,step=0.1,group=gW)
+wBb=input.float(0.5,"Bollinger",minval=0,step=0.1,group=gW)
+wSR=input.float(1.0,"S/R",minval=0,step=0.1,group=gW)
 
-gD = "⑩ Dashboard"
+gD = "⑧ Display"
 showDash   = input.bool(true, "Show dashboard", group = gD)
 dashPos    = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
-showLevels = input.bool(false, "Plot flat entry/TP/SL lines (zones replace these)", group = gD)
+showZones  = input.bool(true, "Draw entry / SL / TP zones", group = gD)
 showSR     = input.bool(true, "Plot S/R staircase", group = gD)
 
-gViz = "⑪ Trade zones (screenshot style)"
-showZones  = input.bool(true, "Draw entry / SL / TP zones", group = gViz)
-zoneLen    = input.int(60, "Zone projection (bars to the right)", minval = 5, maxval = 400, group = gViz)
-showTP2    = input.bool(true, "Show TP2 zone", group = gViz)
-showTP3    = input.bool(true, "Show TP3 zone", group = gViz)
-tp2R       = input.float(2.0, "TP2 (× risk)", minval = 0.1, step = 0.1, group = gViz)
-tp3R       = input.float(3.0, "TP3 (× risk)", minval = 0.1, step = 0.1, group = gViz)
-
-// ============================== CALCULATIONS (identical engine) ==============
+// ============================== CALCULATIONS =================================
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
 emaBias = ta.ema(close, emaBiasLen)
@@ -145,6 +113,8 @@ relVol  = volume / math.max(ta.sma(volume, volLen), 1)
 htfClose = request.security(syminfo.tickerid, htfRes, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 htfEma   = request.security(syminfo.tickerid, htfRes, ta.ema(close, emaFastLen)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 htfBull  = htfClose > htfEma
+dayOpen  = request.security(syminfo.tickerid, "D", open, lookahead = barmerge.lookahead_off)
+dayUp    = close >= dayOpen
 
 ph = ta.pivothigh(high, pivLeft, pivRight)
 pl = ta.pivotlow(low,  pivLeft, pivRight)
@@ -152,55 +122,35 @@ var float lastRes = na
 var float lastSup = na
 lastRes := na(ph) ? lastRes : ph
 lastSup := na(pl) ? lastSup : pl
-nearSup = not na(lastSup) and close > lastSup and (close - lastSup) <= atr * srAtrMult
-nearRes = not na(lastRes) and close < lastRes and (lastRes - close) <= atr * srAtrMult
 
-vEma   = emaFast > emaSlow ? 1 : emaFast < emaSlow ? -1 : 0
-vBias  = close > emaBias ? 1 : close < emaBias ? -1 : 0
-vHtf   = htfBull ? 1 : -1
-vAdx   = adx >= adxMin ? (diPlus > diMinus ? 1 : -1) : 0
-vRsi   = rsi > 55 ? 1 : rsi < 45 ? -1 : 0
-vMacd  = macdHist > 0 and macdLine > macdSignal ? 1 : macdHist < 0 and macdLine < macdSignal ? -1 : 0
-vStoch = stochK > stochD and stochK < 80 ? 1 : stochK < stochD and stochK > 20 ? -1 : 0
-vVol   = relVol >= volThresh ? (close > open ? 1 : close < open ? -1 : 0) : 0
-vVwap  = close > vwap ? 1 : close < vwap ? -1 : 0
-vSt    = stDir < 0 ? 1 : -1
-vBb    = close > bbUp ? 1 : close < bbLo ? -1 : 0
-vSR    = nearSup ? 1 : nearRes ? -1 : 0
-
-score = vEma*wEma + vBias*wBias + vHtf*wHtf + vAdx*wAdx + vRsi*wRsi + vMacd*wMacd + vStoch*wStoch + vVol*wVol + vVwap*wVwap + vSt*wSt + vBb*wBb + vSR*wSR
-maxScore = wEma + wBias + wHtf + wAdx + wRsi + wMacd + wStoch + wVol + wVwap + wSt + wBb + wSR
+nearSup = not na(lastSup) and math.abs(close - lastSup) <= atr * srAtr
+nearRes = not na(lastRes) and math.abs(close - lastRes) <= atr * srAtr
+vEma  = emaFast > emaSlow ? 1 : -1
+vBias = close > emaBias ? 1 : -1
+vHtf  = htfBull ? 1 : -1
+vAdx  = adx >= adxMin ? (diPlus > diMinus ? 1 : -1) : 0
+vRsi  = rsi > 55 ? 1 : rsi < 45 ? -1 : 0
+vMacd = macdHist > 0 and macdLine > macdSignal ? 1 : macdHist < 0 and macdLine < macdSignal ? -1 : 0
+vStoch= stochK > stochD and stochK < 80 ? 1 : stochK < stochD and stochK > 20 ? -1 : 0
+vVol  = relVol >= volThresh ? (close > open ? 1 : close < open ? -1 : 0) : 0
+vVwap = close > vwap ? 1 : -1
+vSt   = stDir < 0 ? 1 : -1
+vBb   = close > bbUp ? 1 : close < bbLo ? -1 : 0
+vSR   = nearSup ? 1 : nearRes ? -1 : 0
+score = vEma*wEma+vBias*wBias+vHtf*wHtf+vAdx*wAdx+vRsi*wRsi+vMacd*wMacd+vStoch*wStoch+vVol*wVol+vVwap*wVwap+vSt*wSt+vBb*wBb+vSR*wSR
+maxScore = wEma+wBias+wHtf+wAdx+wRsi+wMacd+wStoch+wVol+wVwap+wSt+wBb+wSR
 confidence = maxScore > 0 ? math.round(math.abs(score) / maxScore * 100) : 0
 
-inTradeSess = not useSession or not na(time(timeframe.period, tradeSess, tz))
+sessOk      = not useSession or not na(time(timeframe.period, tradeSess, tz))
 newsBlackout= useNews and (not na(time(timeframe.period, news1, tz)) or not na(time(timeframe.period, news2, tz)))
-trendOkLong = (not requireBias or close > emaBias) and (not useHTF or htfBull)
-trendOkShort= (not requireBias or close < emaBias) and (not useHTF or not htfBull)
+trendUp = emaFast > emaSlow and close > emaBias and (not useHTF or htfBull)     and (not useDayBias or dayUp)
+trendDn = emaFast < emaSlow and close < emaBias and (not useHTF or not htfBull) and (not useDayBias or not dayUp)
+pbLong   = ta.lowest(low,  pullLook) <= emaFast + atr * pullAtr
+pbShort  = ta.highest(high, pullLook) >= emaFast - atr * pullAtr
+confLong = close > open and close > emaFast
+confShort= close < open and close < emaFast
 
-// ---------- Pre-trade checklist: the 3 hard questions -----------------------
-dayOpen    = request.security(syminfo.tickerid, "D", open, lookahead = barmerge.lookahead_off)
-dayUp      = close >= dayOpen
-strongUp   = score >=  maxScore * revStrength and htfBull     and stDir < 0
-strongDown = score <= -maxScore * revStrength and not htfBull and stDir > 0
-dirOkLong  = not chkTrend or dayUp     or (allowReversal and strongUp)
-dirOkShort = not chkTrend or not dayUp or (allowReversal and strongDown)
-atSupport  = not na(lastSup) and math.abs(close - lastSup) <= atr * levelAtr
-atResist   = not na(lastRes) and math.abs(close - lastRes) <= atr * levelAtr
-nearVWAP   = math.abs(close - vwap) <= atr * levelAtr
-nearRound  = roundStep > 0 and math.abs(close - math.round(close / roundStep) * roundStep) <= atr * levelAtr
-levelOkLong  = not chkLevel or atSupport or nearVWAP or nearRound
-levelOkShort = not chkLevel or atResist  or nearVWAP or nearRound
-chk3Ok     = atr > 0
-passLong   = not useChecklist or (dirOkLong  and levelOkLong  and chk3Ok)
-passShort  = not useChecklist or (dirOkShort and levelOkShort and chk3Ok)
-riskPts    = atr * atrMult
-dayTxt     = dayUp ? "UP today" : "DOWN today"
-levelTxt   = atSupport ? "@ support" : atResist ? "@ resistance" : nearVWAP ? "@ VWAP" : nearRound ? "@ round#" : "mid-chop"
-lean       = score > 0 ? 1 : score < 0 ? -1 : 0
-cDir       = lean == 1 ? dirOkLong  : lean == -1 ? dirOkShort  : false
-cLvl       = lean == 1 ? levelOkLong : lean == -1 ? levelOkShort : false
-
-// ============================== ADAPTIVE THRESHOLD (from real closed trades) ==
+// ============================== ADAPTIVE (from real closed trades) ===========
 var array<float> recent = array.new<float>()
 var int lastClosed = 0
 if strategy.closedtrades > lastClosed
@@ -209,213 +159,170 @@ if strategy.closedtrades > lastClosed
         if array.size(recent) > adaptWindow
             array.shift(recent)
     lastClosed := strategy.closedtrades
-
 recentWR = array.size(recent) > 0 ? array.sum(recent) / array.size(recent) : na
 adaptThresh = sigThresh
 if useAdaptive and not na(recentWR) and array.size(recent) >= 5
-    adaptThresh := sigThresh + (0.5 - recentWR) * adaptStrength
-    adaptThresh := math.max(1.0, math.min(maxScore, adaptThresh))
-takeTrade = lean != 0 and cDir and cLvl and chk3Ok and math.abs(score) >= adaptThresh and inTradeSess and not newsBlackout
+    adaptThresh := math.max(0.0, sigThresh + (0.5 - recentWR) * adaptStrength)
+
+// ============================== STOP / TARGET ================================
+swingLo = ta.lowest(low, slLook)
+swingHi = ta.highest(high, slLook)
+slLongCalc  = math.min(swingLo, close - atr * atrMult) - atr * slBuf
+slShortCalc = math.max(swingHi, close + atr * atrMult) + atr * slBuf
+riskLongCalc  = close - slLongCalc
+riskShortCalc = slShortCalc - close
+tpLongCalc  = close + rr * riskLongCalc
+tpShortCalc = close - rr * riskShortCalc
+
+longSetup  = trendUp and pbLong  and confLong  and score >=  adaptThresh and sessOk and not newsBlackout
+shortSetup = trendDn and pbShort and confShort and score <= -adaptThresh and sessOk and not newsBlackout
 
 // ============================== ORDERS =======================================
-wantLong  = score >=  adaptThresh and trendOkLong  and inTradeSess and not newsBlackout and passLong
-wantShort = score <= -adaptThresh and trendOkShort and inTradeSess and not newsBlackout and passShort
-flat      = strategy.position_size == 0
-
-stopDist = math.max(atr * atrMult, syminfo.mintick)
-qtyRisk  = (strategy.equity * riskPct / 100) / stopDist
-qtyCap   = (strategy.equity * maxLeverage) / close
-qty      = riskMode == "Risk % equity" ? math.max(0.01, math.min(qtyRisk, qtyCap)) : fixedQty
-
-var float slP = na
-var float tpP = na
+flat = strategy.position_size == 0
 var float entryPx = na
 var int   dirX = 0
-longEntry  = flat and wantLong
-shortEntry = flat and wantShort
+var float slP = na
+var float tpP = na
+longEntry  = longSetup and flat
+shortEntry = shortSetup and flat
 
 if longEntry
+    risk = math.max(riskLongCalc, syminfo.mintick)
+    qty = riskMode == "Risk % equity" ? math.max(0.01, math.min((strategy.equity * riskPct / 100) / risk, (strategy.equity * maxLeverage) / close)) : fixedQty
     strategy.entry("Long", strategy.long, qty = qty)
-    slP := close - stopDist
-    tpP := close + stopDist * rrRatio
-    strategy.exit("Long X", from_entry = "Long", stop = slP, limit = tpP)
+    strategy.exit("Long X", from_entry = "Long", stop = slLongCalc, limit = tpLongCalc)
     entryPx := close
     dirX := 1
+    slP := slLongCalc
+    tpP := tpLongCalc
 if shortEntry
+    risk = math.max(riskShortCalc, syminfo.mintick)
+    qty = riskMode == "Risk % equity" ? math.max(0.01, math.min((strategy.equity * riskPct / 100) / risk, (strategy.equity * maxLeverage) / close)) : fixedQty
     strategy.entry("Short", strategy.short, qty = qty)
-    slP := close + stopDist
-    tpP := close - stopDist * rrRatio
-    strategy.exit("Short X", from_entry = "Short", stop = slP, limit = tpP)
+    strategy.exit("Short X", from_entry = "Short", stop = slShortCalc, limit = tpShortCalc)
     entryPx := close
     dirX := -1
+    slP := slShortCalc
+    tpP := tpShortCalc
 
-// Force-exit / invalidation (closes before SL/TP if the thesis breaks)
-longOpen  = strategy.position_size > 0
-shortOpen = strategy.position_size < 0
-trendFlip = exitOnTrend and (longOpen ? close < emaSlow : shortOpen ? close > emaSlow : false)
-oppScore  = longOpen ? score <= -adaptThresh * exitOnScore : shortOpen ? score >= adaptThresh * exitOnScore : false
-forceExit = useForceExit and (longOpen or shortOpen) and (trendFlip or oppScore)
-if forceExit
+if useForceExit and strategy.position_size != 0 and (strategy.position_size > 0 ? close < emaSlow : close > emaSlow)
     strategy.close_all(comment = "Force exit", alert_message = "APEX FORCE EXIT " + syminfo.ticker)
 
-// ============================== ENGINE STATS =================================
+// ============================== ZONES ========================================
+var box   bxSL    = na
+var box   bxTP    = na
+var line  lnEnt   = na
+var label lbBadge = na
+var label lbSL    = na
+var label lbTP    = na
+if showZones and (longEntry or shortEntry)
+    if not na(bxSL)
+        box.delete(bxSL)
+    if not na(bxTP)
+        box.delete(bxTP)
+    if not na(lnEnt)
+        line.delete(lnEnt)
+    if not na(lbBadge)
+        label.delete(lbBadge)
+    if not na(lbSL)
+        label.delete(lbSL)
+    if not na(lbTP)
+        label.delete(lbTP)
+    int xR = bar_index + 3
+    bxSL := box.new(bar_index, math.max(entryPx, slP), xR, math.min(entryPx, slP), border_color = color.new(color.red, 50), bgcolor = color.new(color.red, 84))
+    bxTP := box.new(bar_index, math.max(entryPx, tpP), xR, math.min(entryPx, tpP), border_color = color.new(color.green, 50), bgcolor = color.new(color.green, 84))
+    lnEnt := line.new(bar_index, entryPx, xR, entryPx, color = color.new(color.blue, 0), width = 2, style = line.style_dashed)
+    lbBadge := label.new(bar_index, entryPx, (dirX == 1 ? "BUY  " : "SELL  ") + str.tostring(score, "#.#") + " | " + str.tostring(confidence) + "%", style = dirX == 1 ? label.style_label_up : label.style_label_down, color = dirX == 1 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor = color.white, size = size.normal)
+    lbSL := label.new(xR, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.red, 10),   textcolor = color.white, size = size.small)
+    lbTP := label.new(xR, tpP, "TP " + str.tostring(tpP, "#.##"), style = label.style_label_left, color = color.new(color.green, 10), textcolor = color.white, size = size.small)
+else if showZones and strategy.position_size != 0 and not na(bxSL)
+    int xR = bar_index + 3
+    box.set_right(bxSL, xR)
+    box.set_right(bxTP, xR)
+    line.set_x2(lnEnt, xR)
+    label.set_x(lbSL, xR)
+    label.set_x(lbTP, xR)
+
+// ============================== STATS / DISPLAY ==============================
 pf = strategy.grossloss != 0 ? strategy.grossprofit / strategy.grossloss : (strategy.grossprofit > 0 ? 999.0 : 0.0)
-wr = strategy.closedtrades > 0 ? strategy.wintrades / strategy.closedtrades * 100 : 0.0
+wrt = strategy.closedtrades > 0 ? strategy.wintrades / strategy.closedtrades * 100 : 0.0
+lean = score > 0 ? 1 : score < 0 ? -1 : 0
+cDir = lean == 1 ? trendUp : lean == -1 ? trendDn : false
+cPull= lean == 1 ? pbLong and confLong : lean == -1 ? pbShort and confShort : false
+takeTrade = longSetup or shortSetup
+dayTxt = dayUp ? "UP day" : "DOWN day"
+longOpen  = strategy.position_size > 0
+shortOpen = strategy.position_size < 0
 
 // ============================== PLOTS ========================================
 plot(emaFast, "EMA fast", color.new(color.aqua, 0), 1)
 plot(emaSlow, "EMA slow", color.new(color.orange, 0), 1)
 plot(emaBias, "EMA bias", color.new(color.gray, 0), 2)
 plot(vwap,    "VWAP",     color.new(color.purple, 0), 1, plot.style_circles)
-
-plot(showLevels and strategy.position_size != 0 ? strategy.position_avg_price : na, "Entry", color.new(color.blue, 0), 2, plot.style_linebr)
-plot(showLevels and strategy.position_size != 0 ? slP : na, "Stop",   color.new(color.red, 0),   2, plot.style_linebr)
-plot(showLevels and strategy.position_size != 0 ? tpP : na, "Target", color.new(color.green, 0), 2, plot.style_linebr)
-
-plot(showSR ? lastRes : na, "Resistance", color.new(color.red, 40),   1, plot.style_stepline)
-plot(showSR ? lastSup : na, "Support",    color.new(color.green, 40), 1, plot.style_stepline)
-
-bgcolor(newsBlackout ? color.new(color.yellow, 88) : na, title = "News blackout")
-plotshape(longEntry,  "BUY",  shape.labelup,   location.belowbar, color.new(color.green, 0), text = "BUY",  textcolor = color.white, size = size.small)
-plotshape(shortEntry, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0),   text = "SELL", textcolor = color.white, size = size.small)
-plotshape(forceExit,  "EXIT", shape.xcross,    location.abovebar, color.new(color.fuchsia, 0), text = "EXIT", textcolor = color.white, size = size.small)
-
-// ----------------------- TRADE-SETUP ZONES (entry / SL / TP1-3) -------------
-var box   zSL    = na
-var box   zT1    = na
-var box   zT2    = na
-var box   zT3    = na
-var line  zEnt   = na
-var label lBadge = na
-var label lSL    = na
-var label lT1    = na
-var label lT2    = na
-var label lT3    = na
-
-if showZones and (longEntry or shortEntry)
-    if not na(zSL)
-        box.delete(zSL)
-    if not na(zT1)
-        box.delete(zT1)
-    if not na(zT2)
-        box.delete(zT2)
-    if not na(zT3)
-        box.delete(zT3)
-    if not na(zEnt)
-        line.delete(zEnt)
-    if not na(lBadge)
-        label.delete(lBadge)
-    if not na(lSL)
-        label.delete(lSL)
-    if not na(lT1)
-        label.delete(lT1)
-    if not na(lT2)
-        label.delete(lT2)
-    if not na(lT3)
-        label.delete(lT3)
-    float rsk  = math.abs(entryPx - slP)
-    float Lent = entryPx
-    float Lsl  = slP
-    float Lt1  = entryPx + dirX * rsk * rrRatio
-    float Lt2  = entryPx + dirX * rsk * tp2R
-    float Lt3  = entryPx + dirX * rsk * tp3R
-    int   xL   = bar_index
-    int   xR   = bar_index + zoneLen
-    zSL  := box.new(xL, math.max(Lent, Lsl), xR, math.min(Lent, Lsl), border_color = color.new(color.red, 50),   bgcolor = color.new(color.red, 82))
-    zT1  := box.new(xL, math.max(Lent, Lt1), xR, math.min(Lent, Lt1), border_color = color.new(color.green, 55), bgcolor = color.new(color.green, 82))
-    zT2  := showTP2 ? box.new(xL, math.max(Lt1, Lt2), xR, math.min(Lt1, Lt2), border_color = color.new(color.green, 65), bgcolor = color.new(color.green, 88)) : na
-    zT3  := showTP3 ? box.new(xL, math.max(Lt2, Lt3), xR, math.min(Lt2, Lt3), border_color = color.new(color.green, 72), bgcolor = color.new(color.green, 92)) : na
-    zEnt := line.new(xL, Lent, xR, Lent, color = color.new(color.blue, 0), width = 2, style = line.style_dashed)
-    lBadge := label.new(xL, Lent, (dirX == 1 ? "BUY  " : "SELL  ") + str.tostring(score, "#.#") + " | " + str.tostring(confidence) + "%", style = dirX == 1 ? label.style_label_up : label.style_label_down, color = dirX == 1 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor = color.white, size = size.normal)
-    lSL  := label.new(xR, Lsl, "SL "  + str.tostring(Lsl, "#.##"), style = label.style_label_left, color = color.new(color.red, 15),   textcolor = color.white, size = size.small)
-    lT1  := label.new(xR, Lt1, "TP1 " + str.tostring(Lt1, "#.##"), style = label.style_label_left, color = color.new(color.green, 15), textcolor = color.white, size = size.small)
-    lT2  := showTP2 ? label.new(xR, Lt2, "TP2 " + str.tostring(Lt2, "#.##"), style = label.style_label_left, color = color.new(color.green, 25), textcolor = color.white, size = size.small) : na
-    lT3  := showTP3 ? label.new(xR, Lt3, "TP3 " + str.tostring(Lt3, "#.##"), style = label.style_label_left, color = color.new(color.green, 35), textcolor = color.white, size = size.small) : na
+plot(showSR ? lastRes : na, "Resistance", color.new(color.red, 45),   1, plot.style_stepline)
+plot(showSR ? lastSup : na, "Support",    color.new(color.green, 45), 1, plot.style_stepline)
+bgcolor(newsBlackout ? color.new(color.yellow, 90) : na, title = "News blackout")
+plotshape(longEntry,  "BUY",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.small)
+plotshape(shortEntry, "SELL", shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.small)
 
 // ============================== DASHBOARD ====================================
 f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
 f_vcol(v) => v > 0 ? color.new(color.green, 0) : v < 0 ? color.new(color.red, 0) : color.new(color.gray, 0)
-f_vtxt(v) => v > 0 ? "▲ BULL" : v < 0 ? "▼ BEAR" : "– flat"
+f_vtxt(v) => v > 0 ? "▲" : v < 0 ? "▼" : "–"
 f_yn(b) => b ? "✓ YES" : "✗ NO"
-f_chkCol(b) => b ? color.new(color.green, 0) : color.new(color.red, 25)
+f_cc(b) => b ? color.new(color.green, 0) : color.new(color.red, 25)
 
-var table dash = table.new(f_pos(), 3, 27, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+var table dash = table.new(f_pos(), 3, 22, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 if showDash and barstate.islast
     txtW = color.white
-    sigState = longOpen ? "● IN LONG" : shortOpen ? "● IN SHORT" : wantLong ? "BUY setup" : wantShort ? "SELL setup" : "WAIT"
-    sigCol   = longOpen ? color.new(color.green, 20) : shortOpen ? color.new(color.red, 20) : wantLong ? color.new(color.green, 40) : wantShort ? color.new(color.red, 40) : color.new(color.gray, 40)
-
-    table.cell(dash, 0, 0, "APEX CONFLUENCE AI — STRATEGY", text_color = txtW, bgcolor = color.new(color.blue, 10))
+    state = longOpen ? "● IN LONG" : shortOpen ? "● IN SHORT" : takeTrade ? (longSetup ? "BUY now" : "SELL now") : "WAIT"
+    stCol = longOpen ? color.new(color.green, 20) : shortOpen ? color.new(color.red, 20) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 40)
+    table.cell(dash, 0, 0, "APEX TREND-PULLBACK — STRATEGY", text_color = txtW, bgcolor = color.new(color.blue, 10))
     table.merge_cells(dash, 0, 0, 2, 0)
     table.cell(dash, 0, 1, "Signal", text_color = txtW, text_halign = text.align_left)
-    table.cell(dash, 1, 1, sigState, text_color = txtW, bgcolor = sigCol)
-    table.cell(dash, 2, 1, str.tostring(confidence) + "% conf", text_color = txtW)
-    table.cell(dash, 0, 2, "Score / max", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 2, str.tostring(score, "#.#") + " / " + str.tostring(maxScore, "#.#"), text_color = score > 0 ? color.green : score < 0 ? color.red : color.gray)
-    table.cell(dash, 2, 2, "thr " + str.tostring(adaptThresh, "#.#"), text_color = color.gray)
-    table.cell(dash, 0, 3, strategy.position_size != 0 ? "Entry" : "Last px", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 3, str.tostring(strategy.position_size != 0 ? strategy.position_avg_price : close, "#.##"), text_color = txtW)
-    table.cell(dash, 2, 3, "ATR " + str.tostring(atr, "#.##"), text_color = color.gray)
-    table.cell(dash, 0, 4, "Target / Stop", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 4, strategy.position_size != 0 ? str.tostring(tpP, "#.##") : "—", text_color = color.green)
-    table.cell(dash, 2, 4, strategy.position_size != 0 ? str.tostring(slP, "#.##") : "—", text_color = color.red)
+    table.cell(dash, 1, 1, state, text_color = txtW, bgcolor = stCol)
+    table.cell(dash, 2, 1, str.tostring(confidence) + "%", text_color = txtW)
+    table.cell(dash, 0, 2, "Entry", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 2, str.tostring(strategy.position_size != 0 ? strategy.position_avg_price : close, "#.##"), text_color = txtW)
+    table.cell(dash, 2, 2, "1:" + str.tostring(rr, "#.#"), text_color = color.gray)
+    table.cell(dash, 0, 3, "Target / Stop", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 3, strategy.position_size != 0 ? str.tostring(tpP, "#.##") : "—", text_color = color.green)
+    table.cell(dash, 2, 3, strategy.position_size != 0 ? str.tostring(slP, "#.##") : "—", text_color = color.red)
 
-    table.cell(dash, 0, 5, "— FACTORS —", text_color = txtW, bgcolor = color.new(color.gray, 60))
-    table.merge_cells(dash, 0, 5, 2, 5)
-    table.cell(dash, 0, 6,  "Trend EMA",  text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 6,  f_vtxt(vEma), text_color = txtW, bgcolor = f_vcol(vEma))
-    table.cell(dash, 0, 7,  "Bias EMA200", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 7,  f_vtxt(vBias), text_color = txtW, bgcolor = f_vcol(vBias))
-    table.cell(dash, 0, 8,  "HTF " + htfRes, text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 8,  f_vtxt(vHtf), text_color = txtW, bgcolor = f_vcol(vHtf))
-    table.cell(dash, 0, 9,  "ADX/DMI " + str.tostring(adx, "#.#"), text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 9,  f_vtxt(vAdx), text_color = txtW, bgcolor = f_vcol(vAdx))
-    table.cell(dash, 0, 10, "RSI " + str.tostring(rsi, "#.#"), text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 10, f_vtxt(vRsi), text_color = txtW, bgcolor = f_vcol(vRsi))
-    table.cell(dash, 0, 11, "MACD", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 11, f_vtxt(vMacd), text_color = txtW, bgcolor = f_vcol(vMacd))
-    table.cell(dash, 0, 12, "Stochastic " + str.tostring(stochK, "#.#"), text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 12, f_vtxt(vStoch), text_color = txtW, bgcolor = f_vcol(vStoch))
-    table.cell(dash, 0, 13, "Volume " + str.tostring(relVol, "#.##") + "×", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 13, f_vtxt(vVol), text_color = txtW, bgcolor = f_vcol(vVol))
-    table.cell(dash, 0, 14, "VWAP", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 14, f_vtxt(vVwap), text_color = txtW, bgcolor = f_vcol(vVwap))
-    table.cell(dash, 0, 15, "Supertrend", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 15, f_vtxt(vSt), text_color = txtW, bgcolor = f_vcol(vSt))
-    table.cell(dash, 0, 16, "Bollinger", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 16, f_vtxt(vBb), text_color = txtW, bgcolor = f_vcol(vBb))
-    table.cell(dash, 0, 17, "S/R proximity", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 2, 17, f_vtxt(vSR), text_color = txtW, bgcolor = f_vcol(vSR))
+    table.cell(dash, 0, 4, "— CHECKLIST —", text_color = txtW, bgcolor = color.new(color.gray, 60))
+    table.merge_cells(dash, 0, 4, 2, 4)
+    table.cell(dash, 0, 5, "1 With trend?", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 5, dayTxt, text_color = txtW)
+    table.cell(dash, 2, 5, f_yn(cDir), text_color = txtW, bgcolor = f_cc(cDir))
+    table.cell(dash, 0, 6, "2 Pullback entry?", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 6, cPull ? "yes" : "wait", text_color = txtW)
+    table.cell(dash, 2, 6, f_yn(cPull), text_color = txtW, bgcolor = f_cc(cPull))
+    table.cell(dash, 0, 7, "VERDICT", text_color = txtW, bgcolor = color.new(color.blue, 20))
+    table.cell(dash, 1, 7, takeTrade ? "✔ TAKE " + (longSetup ? "LONG" : "SHORT") : "✘ SKIP", text_color = color.white, bgcolor = takeTrade ? color.new(color.green, 0) : color.new(color.red, 10))
+    table.merge_cells(dash, 1, 7, 2, 7)
 
-    table.cell(dash, 0, 18, "— STRATEGY TESTER —", text_color = txtW, bgcolor = color.new(color.gray, 60))
-    table.merge_cells(dash, 0, 18, 2, 18)
-    table.cell(dash, 0, 19, "Net / Trades", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 19, str.tostring(strategy.netprofit, "#.#"), text_color = strategy.netprofit >= 0 ? color.green : color.red)
-    table.cell(dash, 2, 19, str.tostring(strategy.closedtrades), text_color = txtW)
-    table.cell(dash, 0, 20, "Win% / PF", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 20, str.tostring(wr, "#.#") + "%", text_color = wr >= 50 ? color.green : color.red)
-    table.cell(dash, 2, 20, str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red)
-    table.cell(dash, 0, 21, "Max DD / Recent W%", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 21, str.tostring(strategy.max_drawdown, "#.#"), text_color = color.red)
-    table.cell(dash, 2, 21, na(recentWR) ? "—" : str.tostring(recentWR * 100, "#.#") + "%", text_color = txtW)
+    table.cell(dash, 0, 8, "— CONFIRMATION —", text_color = txtW, bgcolor = color.new(color.gray, 60))
+    table.merge_cells(dash, 0, 8, 2, 8)
+    table.cell(dash, 0, 9, "Score / thr", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 9, str.tostring(score, "#.#"), text_color = score > 0 ? color.green : color.red)
+    table.cell(dash, 2, 9, "≥ " + str.tostring(adaptThresh, "#.#"), text_color = color.gray)
+    table.cell(dash, 0, 10, "EMA/Bias/HTF", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 2, 10, f_vtxt(vEma + vBias + vHtf), text_color = txtW, bgcolor = f_vcol(vEma + vBias + vHtf))
+    table.cell(dash, 0, 11, "RSI/MACD/Stoch", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 2, 11, f_vtxt(vRsi + vMacd + vStoch), text_color = txtW, bgcolor = f_vcol(vRsi + vMacd + vStoch))
+    table.cell(dash, 0, 12, "Vol/VWAP/ST", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 2, 12, f_vtxt(vVol + vVwap + vSt), text_color = txtW, bgcolor = f_vcol(vVol + vVwap + vSt))
+    table.cell(dash, 0, 13, "ADX/BB/S-R", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 2, 13, f_vtxt(vAdx + vBb + vSR), text_color = txtW, bgcolor = f_vcol(vAdx + vBb + vSR))
 
-    table.cell(dash, 0, 22, "— PRE-TRADE CHECK —", text_color = txtW, bgcolor = color.new(color.gray, 60))
-    table.merge_cells(dash, 0, 22, 2, 22)
-    table.cell(dash, 0, 23, "1 With trend?", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 23, dayTxt, text_color = txtW)
-    table.cell(dash, 2, 23, f_yn(cDir), text_color = txtW, bgcolor = f_chkCol(cDir))
-    table.cell(dash, 0, 24, "2 At a level?", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 24, levelTxt, text_color = txtW)
-    table.cell(dash, 2, 24, f_yn(cLvl), text_color = txtW, bgcolor = f_chkCol(cLvl))
-    table.cell(dash, 0, 25, "3 SL + TP set?", text_color = color.gray, text_halign = text.align_left)
-    table.cell(dash, 1, 25, "risk " + str.tostring(riskPts, "#.##"), text_color = txtW)
-    table.cell(dash, 2, 25, f_yn(chk3Ok), text_color = txtW, bgcolor = f_chkCol(chk3Ok))
-    table.cell(dash, 0, 26, "VERDICT", text_color = txtW, bgcolor = color.new(color.blue, 20))
-    table.cell(dash, 1, 26, takeTrade ? "✔ TAKE " + (lean == 1 ? "LONG" : "SHORT") : "✘ SKIP", text_color = color.white, bgcolor = takeTrade ? color.new(color.green, 0) : color.new(color.red, 10))
-    table.merge_cells(dash, 1, 26, 2, 26)
-
-// ============================== ALERTS =======================================
-if longEntry
-    alert("APEX-S BUY " + syminfo.ticker + " @ " + str.tostring(close, "#.##") + " | TP " + str.tostring(close + stopDist * rrRatio, "#.##") + " | SL " + str.tostring(close - stopDist, "#.##") + " | conf " + str.tostring(confidence) + "%", alert.freq_once_per_bar_close)
-if shortEntry
-    alert("APEX-S SELL " + syminfo.ticker + " @ " + str.tostring(close, "#.##") + " | TP " + str.tostring(close - stopDist * rrRatio, "#.##") + " | SL " + str.tostring(close + stopDist, "#.##") + " | conf " + str.tostring(confidence) + "%", alert.freq_once_per_bar_close)
+    table.cell(dash, 0, 14, "— STRATEGY TESTER —", text_color = txtW, bgcolor = color.new(color.gray, 60))
+    table.merge_cells(dash, 0, 14, 2, 14)
+    table.cell(dash, 0, 15, "Net / Trades", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 15, str.tostring(strategy.netprofit, "#.#"), text_color = strategy.netprofit >= 0 ? color.green : color.red)
+    table.cell(dash, 2, 15, str.tostring(strategy.closedtrades), text_color = txtW)
+    table.cell(dash, 0, 16, "Win% / PF", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 16, str.tostring(wrt, "#.#") + "%", text_color = wrt >= 50 ? color.green : color.red)
+    table.cell(dash, 2, 16, str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red)
+    table.cell(dash, 0, 17, "Max DD", text_color = color.gray, text_halign = text.align_left)
+    table.cell(dash, 1, 17, str.tostring(strategy.max_drawdown, "#.#"), text_color = color.red)
+    table.cell(dash, 2, 17, na(recentWR) ? "—" : str.tostring(recentWR * 100, "#.#") + "% rec", text_color = txtW)
