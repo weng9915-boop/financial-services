@@ -18,12 +18,12 @@
 // =============================================================================
 
 indicator("Apex Trend-Pullback AI [XAUUSD]", "ApexTP", overlay = true,
-     max_lines_count = 100, max_labels_count = 200, max_boxes_count = 60)
+     max_lines_count = 100, max_labels_count = 500, max_boxes_count = 60)
 
 // ============================== INPUTS =======================================
 gC = "① Core"
 rr           = input.float(2.0,  "Reward : Risk  (1 : X)", minval = 0.5, step = 0.1, group = gC, tooltip = "Take-profit = stop distance × this. 2.0 = your requested 1:2.")
-sigThresh    = input.float(2.5,  "Min confluence score (confirm)", minval = 0.0, step = 0.5, group = gC, tooltip = "Trend + pullback is the edge; this just makes sure the indicators don't disagree.")
+sigThresh    = input.float(3.5,  "Min confluence score (confirm)", minval = 0.0, step = 0.5, group = gC, tooltip = "Raised for selectivity — higher = fewer, higher-quality entries. Gates how much the indicators must agree.")
 useAdaptive  = input.bool(true,  "Adaptive: tighten after losing streak", group = gC)
 adaptWindow  = input.int(20,     "Adaptive look-back (last N trades)", minval = 5, maxval = 200, group = gC)
 adaptStrength= input.float(3.0,  "Adaptive strength (0 = off)", minval = 0.0, step = 0.5, group = gC)
@@ -40,6 +40,8 @@ useDayBias   = input.bool(true, "Trade with higher-TF direction only", group = g
 biasTF       = input.timeframe("60", "  Direction timeframe (60=1H, 240=4H)", group = gE)
 pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
 pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
+strictConfirm= input.bool(true, "Strict confirm: close beyond prior bar", group = gE, tooltip = "Entry bar must close above the prior bar's high (long) / below its low (short) — a real resumption, not just any close.")
+requireVol   = input.bool(false, "Require volume confirm on entry", group = gE, tooltip = "Entry bar volume must exceed the Rel-volume threshold (⑤) — filters low-liquidity fakeouts.")
 
 gStop = "③ Stop & target (structure)"
 atrLen       = input.int(14,  "ATR length", minval = 1, group = gStop)
@@ -96,6 +98,8 @@ dashPos    = input.string("Top Right", "Position", options = ["Top Right","Top L
 dashCompact= input.bool(true, "Compact minimap dashboard", group = gD)
 showZones  = input.bool(true, "Draw entry / SL / TP zones", group = gD)
 showSR     = input.bool(true, "Plot S/R staircase", group = gD)
+showChoc   = input.bool(true, "Direction / change-of-character arrows + %", group = gD, tooltip = "Plots ▲up/▼down when net confluence flips, with the support % (low % = likely fakeout, high % = stronger conviction). These are NOT entries — just a read on direction so you can hold or bail a setup.")
+chocThresh = input.float(1.5, "  CHoCH flip threshold (score deadband)", minval = 0.0, step = 0.5, group = gD)
 
 // ============================== CALCULATIONS =================================
 emaFast = ta.ema(close, emaFastLen)
@@ -144,6 +148,12 @@ score = vEma*wEma+vBias*wBias+vHtf*wHtf+vAdx*wAdx+vRsi*wRsi+vMacd*wMacd+vStoch*w
 maxScore = wEma+wBias+wHtf+wAdx+wRsi+wMacd+wStoch+wVol+wVwap+wSt+wBb+wSR
 confidence = maxScore > 0 ? math.round(math.abs(score) / maxScore * 100) : 0
 
+// Direction / change-of-character: net confluence flips past a deadband
+var int biasState = 0
+biasState := score >= chocThresh ? 1 : score <= -chocThresh ? -1 : biasState
+chocUp = biasState == 1 and biasState[1] != 1
+chocDn = biasState == -1 and biasState[1] != -1
+
 // ============================== FILTERS / REGIME =============================
 sessOk      = not useSession or not na(time(timeframe.period, tradeSess, tz))
 newsBlackout= useNews and (not na(time(timeframe.period, news1, tz)) or not na(time(timeframe.period, news2, tz)))
@@ -155,8 +165,8 @@ trendDn = emaFast < emaSlow and close < emaBias and (not useHTF or not htfBull) 
 // pullback to the fast EMA within the look-back, then close back through it
 pbLong   = ta.lowest(low,  pullLook) <= emaFast + atr * pullAtr
 pbShort  = ta.highest(high, pullLook) >= emaFast - atr * pullAtr
-confLong = close > open and close > emaFast
-confShort= close < open and close < emaFast
+confLong = close > open and close > emaFast and (not strictConfirm or close > high[1])
+confShort= close < open and close < emaFast and (not strictConfirm or close < low[1])
 
 // ============================== ADAPTIVE THRESHOLD ===========================
 var array<float> recent = array.new<float>()
@@ -176,8 +186,8 @@ tpLongCalc  = close + rr * riskLongCalc
 tpShortCalc = close - rr * riskShortCalc
 
 // ============================== SETUP TRIGGERS ===============================
-longSetup  = trendUp and pbLong  and confLong  and score >=  adaptThresh and sessOk and not newsBlackout and afterStart
-shortSetup = trendDn and pbShort and confShort and score <= -adaptThresh and sessOk and not newsBlackout and afterStart
+longSetup  = trendUp and pbLong  and confLong  and score >=  adaptThresh and (not requireVol or relVol >= volThresh) and sessOk and not newsBlackout and afterStart
+shortSetup = trendDn and pbShort and confShort and score <= -adaptThresh and (not requireVol or relVol >= volThresh) and sessOk and not newsBlackout and afterStart
 
 // ============================== TRADE STATE MACHINE ==========================
 var bool  inTrade  = false
@@ -296,6 +306,12 @@ plotshape(shortSignal, "SELL", shape.triangledown, location.abovebar, color.new(
 plotshape(forceExitFlag, "FORCE EXIT", shape.xcross, location.abovebar, color.new(color.fuchsia, 0), text = "EXIT", textcolor = color.white, size = size.tiny)
 plotshape(tpHit, "TP hit", shape.circle, location.belowbar, color.new(color.green, 0), size = size.tiny)
 plotshape(slHit, "SL hit", shape.circle, location.abovebar, color.new(color.red, 0),   size = size.tiny)
+
+// Direction / change-of-character arrows with support %
+if showChoc and chocUp and barstate.isconfirmed
+    label.new(bar_index, low, "▲ " + str.tostring(confidence) + "%", yloc = yloc.belowbar, style = label.style_label_up, color = color.new(color.teal, 25), textcolor = color.white, size = size.tiny)
+if showChoc and chocDn and barstate.isconfirmed
+    label.new(bar_index, high, "▼ " + str.tostring(confidence) + "%", yloc = yloc.abovebar, style = label.style_label_down, color = color.new(color.maroon, 25), textcolor = color.white, size = size.tiny)
 
 // ============================== DASHBOARD ====================================
 f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
