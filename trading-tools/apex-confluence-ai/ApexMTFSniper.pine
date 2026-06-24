@@ -264,7 +264,7 @@ var float entryP  = na
 var float slP     = na
 var float tpP     = na
 var int   nWins   = 0
-var int   nLoss   = 0
+var int   nLosses = 0
 var float grossW  = 0.0
 var float grossL  = 0.0
 
@@ -301,7 +301,7 @@ if barstate.isconfirmed
             float plNet = (posDir == 1 ? exitPrice - entryP : entryP - exitPrice) - costPerTrade
             bool win = plNet >= 0
             nWins  := nWins + (win ? 1 : 0)
-            nLoss  := nLoss + (win ? 0 : 1)
+            nLosses := nLosses + (win ? 0 : 1)
             grossW := grossW + (win ? plNet : 0.0)
             grossL := grossL + (win ? 0.0 : -plNet)
             inTrade := false
@@ -345,7 +345,7 @@ if barstate.isconfirmed
         label.set_x(lbTP, xR)
 
 // ============================== STATS ========================================
-totTrades = nWins + nLoss
+totTrades = nWins + nLosses
 winRate   = totTrades > 0 ? nWins / totTrades * 100 : 0.0
 profitF   = grossL > 0 ? grossW / grossL : (grossW > 0 ? 999.0 : 0.0)
 netPts    = grossW - grossL
