@@ -36,7 +36,8 @@ emaSlowLen   = input.int(50,  "EMA slow", minval = 1, group = gE)
 emaBiasLen   = input.int(200, "EMA bias (long-term)", minval = 1, group = gE)
 useHTF       = input.bool(true, "Higher-timeframe trend filter", group = gE)
 htfRes       = input.timeframe("15", "Higher timeframe", group = gE)
-useDayBias   = input.bool(true, "Trade with the day's direction only", group = gE)
+useDayBias   = input.bool(true, "Trade with higher-TF direction only", group = gE)
+biasTF       = input.timeframe("60", "  Direction timeframe (60=1H, 240=4H)", group = gE)
 pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
 pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
 
@@ -114,7 +115,7 @@ relVol  = volume / math.max(ta.sma(volume, volLen), 1)
 htfClose = request.security(syminfo.tickerid, htfRes, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 htfEma   = request.security(syminfo.tickerid, htfRes, ta.ema(close, emaFastLen)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 htfBull  = htfClose > htfEma
-dayOpen  = request.security(syminfo.tickerid, "D", open, lookahead = barmerge.lookahead_off)
+dayOpen  = request.security(syminfo.tickerid, biasTF, open, lookahead = barmerge.lookahead_off)
 dayUp    = close >= dayOpen
 
 ph = ta.pivothigh(high, pivLeft, pivRight)
@@ -278,7 +279,7 @@ lean      = score > 0 ? 1 : score < 0 ? -1 : 0
 cDir      = lean == 1 ? trendUp : lean == -1 ? trendDn : false
 cPull     = lean == 1 ? pbLong and confLong : lean == -1 ? pbShort and confShort : false
 takeTrade = longSetup or shortSetup
-dayTxt    = dayUp ? "UP day" : "DOWN day"
+dayTxt    = (dayUp ? "UP " : "DOWN ") + biasTF
 pullTxt   = (lean == 1 ? (pbLong ? (confLong ? "pullback+confirm" : "pullback, no confirm") : "no pullback") : lean == -1 ? (pbShort ? (confShort ? "pullback+confirm" : "pullback, no confirm") : "no pullback") : "—")
 riskNow   = inTrade ? math.abs(entryP - slP) : (lean == 1 ? riskLongCalc : riskShortCalc)
 
