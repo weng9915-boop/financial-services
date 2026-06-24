@@ -23,7 +23,7 @@ indicator("Apex Trend-Pullback AI [XAUUSD]", "ApexTP", overlay = true,
 // ============================== INPUTS =======================================
 gC = "① Core"
 rr           = input.float(2.0,  "Reward : Risk  (1 : X)", minval = 0.5, step = 0.1, group = gC, tooltip = "Take-profit = stop distance × this. 2.0 = your requested 1:2.")
-sigThresh    = input.float(3.5,  "Min confluence score (confirm)", minval = 0.0, step = 0.5, group = gC, tooltip = "Raised for selectivity — higher = fewer, higher-quality entries. Gates how much the indicators must agree.")
+sigThresh    = input.float(2.5,  "Min confluence score (confirm)", minval = 0.0, step = 0.5, group = gC, tooltip = "Trend + pullback is the edge; this just makes sure the indicators don't disagree.")
 useAdaptive  = input.bool(true,  "Adaptive: tighten after losing streak", group = gC)
 adaptWindow  = input.int(20,     "Adaptive look-back (last N trades)", minval = 5, maxval = 200, group = gC)
 adaptStrength= input.float(3.0,  "Adaptive strength (0 = off)", minval = 0.0, step = 0.5, group = gC)
@@ -40,8 +40,6 @@ useDayBias   = input.bool(true, "Trade with higher-TF direction only", group = g
 biasTF       = input.timeframe("60", "  Direction timeframe (60=1H, 240=4H)", group = gE)
 pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
 pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
-strictConfirm= input.bool(true, "Strict confirm: close beyond prior bar", group = gE, tooltip = "Entry bar must close above the prior bar's high (long) / below its low (short) — a real resumption, not just any close.")
-requireVol   = input.bool(false, "Require volume confirm on entry", group = gE, tooltip = "Entry bar volume must exceed the Rel-volume threshold (⑤) — filters low-liquidity fakeouts.")
 
 gStop = "③ Stop & target (structure)"
 atrLen       = input.int(14,  "ATR length", minval = 1, group = gStop)
@@ -165,8 +163,8 @@ trendDn = emaFast < emaSlow and close < emaBias and (not useHTF or not htfBull) 
 // pullback to the fast EMA within the look-back, then close back through it
 pbLong   = ta.lowest(low,  pullLook) <= emaFast + atr * pullAtr
 pbShort  = ta.highest(high, pullLook) >= emaFast - atr * pullAtr
-confLong = close > open and close > emaFast and (not strictConfirm or close > high[1])
-confShort= close < open and close < emaFast and (not strictConfirm or close < low[1])
+confLong = close > open and close > emaFast
+confShort= close < open and close < emaFast
 
 // ============================== ADAPTIVE THRESHOLD ===========================
 var array<float> recent = array.new<float>()
@@ -186,8 +184,8 @@ tpLongCalc  = close + rr * riskLongCalc
 tpShortCalc = close - rr * riskShortCalc
 
 // ============================== SETUP TRIGGERS ===============================
-longSetup  = trendUp and pbLong  and confLong  and score >=  adaptThresh and (not requireVol or relVol >= volThresh) and sessOk and not newsBlackout and afterStart
-shortSetup = trendDn and pbShort and confShort and score <= -adaptThresh and (not requireVol or relVol >= volThresh) and sessOk and not newsBlackout and afterStart
+longSetup  = trendUp and pbLong  and confLong  and score >=  adaptThresh and sessOk and not newsBlackout and afterStart
+shortSetup = trendDn and pbShort and confShort and score <= -adaptThresh and sessOk and not newsBlackout and afterStart
 
 // ============================== TRADE STATE MACHINE ==========================
 var bool  inTrade  = false
