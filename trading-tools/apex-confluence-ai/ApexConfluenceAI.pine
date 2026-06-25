@@ -54,6 +54,10 @@ slBuf        = input.float(0.5, "Stop buffer beyond swing (× ATR) — survive w
 
 gExit = "④ Early exit"
 useForceExit = input.bool(false, "Force-exit if trend flips (else pure SL/TP)", group = gExit)
+useTimeStop  = input.bool(true, "Time stop: exit a trade that goes nowhere", group = gExit, tooltip = "Closes a trade that hasn't hit SL or TP after N bars — kills the 'stuck for hours in a dead market' problem.")
+maxBarsInTrade = input.int(120, "  Max bars in trade (120 = 2h on 1m)", minval = 5, group = gExit)
+useStallExit = input.bool(true, "Volatility/volume stall exit", group = gExit, tooltip = "Closes a trade when ATR (volatility, which tracks volume) collapses below a fraction of the ATR at entry — i.e. the market went quiet and price won't reach either level.")
+stallAtrFrac = input.float(0.5, "  Exit if ATR falls below × entry-ATR", minval = 0.1, maxval = 1.0, step = 0.05, group = gExit)
 
 gConf = "⑤ Confirmation indicators (score)"
 rsiLen       = input.int(14, "RSI length", minval = 1, group = gConf)
@@ -208,6 +212,8 @@ var bool  pending  = false
 var int   pendDir  = 0
 var float pendPx   = na
 var int   pendBar  = 0
+var int   entryBarIdx = na
+var float entryAtr    = na
 
 var box   bxSL    = na
 var box   bxTP    = na
@@ -223,6 +229,7 @@ cancelSignal  = false
 tpHit         = false
 slHit         = false
 forceExitFlag = false
+stallExit     = false
 
 if barstate.isconfirmed
     bool justClosed = false
@@ -230,6 +237,8 @@ if barstate.isconfirmed
         bool hitSL = posDir == 1 ? low  <= slP : high >= slP
         bool hitTP = posDir == 1 ? high >= tpP : low  <= tpP
         bool invalid = useForceExit and (posDir == 1 ? close < emaSlow : close > emaSlow)
+        bool timeUp = useTimeStop and not na(entryBarIdx) and bar_index - entryBarIdx >= maxBarsInTrade
+        bool volDied = useStallExit and not na(entryAtr) and atr < entryAtr * stallAtrFrac
         float exitPrice = na
         if hitSL
             exitPrice := slP
@@ -240,6 +249,9 @@ if barstate.isconfirmed
         else if invalid
             exitPrice := close
             forceExitFlag := true
+        else if timeUp or volDied
+            exitPrice := close
+            stallExit := true
         if not na(exitPrice)
             float plNet = (posDir == 1 ? exitPrice - entryP : entryP - exitPrice) - costPerTrade
             bool win = plNet >= 0
@@ -295,6 +307,11 @@ if barstate.isconfirmed
             inTrade := true
             longSignal  := longSetup
             shortSignal := shortSetup
+
+    // track entry bar + ATR for the time / stall exits
+    if longSignal or shortSignal
+        entryBarIdx := bar_index
+        entryAtr := atr
 
     // ----- draw / freeze the setup zone (locked at entry, attached to price) -
     if showZones and (longSignal or shortSignal)
@@ -354,6 +371,7 @@ plotshape(slHit, "SL hit", shape.circle, location.abovebar, color.new(color.red,
 plot(pending ? pendPx : na, "Pending entry", color.new(color.blue, 0), 1, plot.style_circles)
 plotshape(setupSignal, "Setup armed", shape.diamond, location.belowbar, color.new(color.blue, 0), size = size.tiny)
 plotshape(cancelSignal, "Setup cancelled", shape.xcross, location.belowbar, color.new(color.gray, 30), size = size.tiny)
+plotshape(stallExit, "Stall/time exit", shape.square, location.abovebar, color.new(color.gray, 0), text = "⏱", textcolor = color.white, size = size.tiny)
 
 // Direction / change-of-character arrows + % (bold on a flip, lighter heartbeat otherwise so it's always on screen)
 dueChoc = bar_index - lastChocBar >= chocEvery
@@ -469,9 +487,12 @@ if shortSignal
     alert("APEX SELL " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | 1:" + str.tostring(rr, "#.#"), alert.freq_once_per_bar_close)
 if forceExitFlag
     alert("APEX FORCE EXIT " + syminfo.ticker + " @ " + str.tostring(close, "#.##"), alert.freq_once_per_bar_close)
+if stallExit
+    alert("APEX STALL EXIT " + syminfo.ticker + " @ " + str.tostring(close, "#.##") + " — closed (went nowhere / low volume)", alert.freq_once_per_bar_close)
 if setupSignal
     alert("APEX SETUP " + syminfo.ticker + " " + (pendDir == 1 ? "LONG" : "SHORT") + " — waiting for entry near " + str.tostring(pendPx, "#.##"), alert.freq_once_per_bar_close)
 alertcondition(setupSignal,   "Apex Setup Forming","Apex setup forming")
+alertcondition(stallExit,     "Apex Stall Exit",  "Apex stall/time exit")
 alertcondition(longSignal,    "Apex Long Entry",  "Apex BUY")
 alertcondition(shortSignal,   "Apex Short Entry", "Apex SELL")
 alertcondition(forceExitFlag, "Apex Force Exit",  "Apex FORCE EXIT")
