@@ -40,7 +40,7 @@ useDayBias   = input.bool(true, "Trade with higher-TF direction only", group = g
 biasTF       = input.timeframe("60", "  Direction timeframe (60=1H, 240=4H)", group = gE)
 pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
 pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
-usePullback  = input.bool(true, "Wait for a better entry price (limit)", group = gE, tooltip = "After a setup, wait for price to retrace toward you (a higher short / lower long) before entering — beats the early-entry SL tag, and skips setups that just run away.")
+usePullback  = input.bool(false, "Wait for a better entry price (limit) — leave OFF", group = gE, tooltip = "OFF by default: on a trend-CONTINUATION system a limit entry adversely selects losers (it fills setups where price first moved AGAINST you, and misses the clean ones that ran immediately). The real fix for stop-hunt tags is the wider stop buffer in ③.")
 entryPullAtr = input.float(0.4, "  Better-entry offset (× ATR)", minval = 0.0, step = 0.1, group = gE)
 entryWaitBars= input.int(5,    "  Cancel setup if not filled in N bars", minval = 1, group = gE)
 enterAtMktIfMiss = input.bool(false, "  Enter at market if pullback missed", group = gE)
@@ -49,7 +49,7 @@ gStop = "③ Stop & target (structure)"
 atrLen       = input.int(14,  "ATR length", minval = 1, group = gStop)
 atrMult      = input.float(1.0, "Min stop = ATR ×", minval = 0.1, step = 0.1, group = gStop, tooltip = "Stop is the FURTHER of: beyond the swing, or this ATR floor.")
 slLook       = input.int(10,  "Swing look-back for stop", minval = 1, group = gStop)
-slBuf        = input.float(0.3, "Stop buffer beyond swing (× ATR)", minval = 0.0, step = 0.1, group = gStop)
+slBuf        = input.float(0.5, "Stop buffer beyond swing (× ATR) — survive wiggles", minval = 0.0, step = 0.1, group = gStop, tooltip = "THE knob for 'price tagged my SL then went to TP'. Bigger = more room to survive the initial stop-hunt, but a farther 1:2 target (tradeoff). Try 0.4-1.0. Set 0.3 for the exact old behaviour.")
 
 gExit = "④ Early exit"
 useForceExit = input.bool(false, "Force-exit if trend flips (else pure SL/TP)", group = gExit)
