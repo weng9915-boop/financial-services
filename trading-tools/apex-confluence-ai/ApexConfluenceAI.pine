@@ -40,6 +40,7 @@ useDayBias   = input.bool(true, "Trade with higher-TF direction only", group = g
 biasTF       = input.timeframe("60", "  Direction timeframe (60=1H, 240=4H)", group = gE)
 pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
 pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
+strictConfirm= input.bool(false, "Strict confirm: close beyond prior bar", group = gE, tooltip = "Optional. Entry bar must close above the prior bar's high (long) / below its low (short) — a real resumption. Filters weak / wrong-direction setups. Turn ON and compare win-rate.")
 usePullback  = input.bool(false, "Wait for a better entry price (limit) — leave OFF", group = gE, tooltip = "OFF by default: on a trend-CONTINUATION system a limit entry adversely selects losers (it fills setups where price first moved AGAINST you, and misses the clean ones that ran immediately). The real fix for stop-hunt tags is the wider stop buffer in ③.")
 entryPullAtr = input.float(0.4, "  Better-entry offset (× ATR)", minval = 0.0, step = 0.1, group = gE)
 entryWaitBars= input.int(5,    "  Cancel setup if not filled in N bars", minval = 1, group = gE)
@@ -169,8 +170,8 @@ trendDn = emaFast < emaSlow and close < emaBias and (not useHTF or not htfBull) 
 // pullback to the fast EMA within the look-back, then close back through it
 pbLong   = ta.lowest(low,  pullLook) <= emaFast + atr * pullAtr
 pbShort  = ta.highest(high, pullLook) >= emaFast - atr * pullAtr
-confLong = close > open and close > emaFast
-confShort= close < open and close < emaFast
+confLong = close > open and close > emaFast and (not strictConfirm or close > high[1])
+confShort= close < open and close < emaFast and (not strictConfirm or close < low[1])
 
 // ============================== ADAPTIVE THRESHOLD ===========================
 var array<float> recent = array.new<float>()
