@@ -40,6 +40,10 @@ useDayBias   = input.bool(true, "Trade with higher-TF direction only", group = g
 biasTF       = input.timeframe("60", "  Direction timeframe (60=1H, 240=4H)", group = gE)
 pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
 pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
+usePullback  = input.bool(true, "Wait for a better entry price (limit)", group = gE, tooltip = "After a setup, wait for price to retrace toward you (a higher short / lower long) before entering — beats the early-entry SL tag, and skips setups that just run away.")
+entryPullAtr = input.float(0.4, "  Better-entry offset (× ATR)", minval = 0.0, step = 0.1, group = gE)
+entryWaitBars= input.int(5,    "  Cancel setup if not filled in N bars", minval = 1, group = gE)
+enterAtMktIfMiss = input.bool(false, "  Enter at market if pullback missed", group = gE)
 
 gStop = "③ Stop & target (structure)"
 atrLen       = input.int(14,  "ATR length", minval = 1, group = gStop)
@@ -98,6 +102,7 @@ showZones  = input.bool(true, "Draw entry / SL / TP zones", group = gD)
 showSR     = input.bool(true, "Plot S/R staircase", group = gD)
 showChoc   = input.bool(true, "Direction / change-of-character arrows + %", group = gD, tooltip = "Plots ▲up/▼down when net confluence flips, with the support % (low % = likely fakeout, high % = stronger conviction). These are NOT entries — just a read on direction so you can hold or bail a setup.")
 chocThresh = input.float(1.5, "  CHoCH flip threshold (score deadband)", minval = 0.0, step = 0.5, group = gD)
+chocEvery  = input.int(5, "  Re-show direction every N bars", minval = 1, group = gD, tooltip = "Keeps an up/down % read on screen even without a flip. Lower = more frequent.")
 
 // ============================== CALCULATIONS =================================
 emaFast = ta.ema(close, emaFastLen)
@@ -151,6 +156,7 @@ var int biasState = 0
 biasState := score >= chocThresh ? 1 : score <= -chocThresh ? -1 : biasState
 chocUp = biasState == 1 and biasState[1] != 1
 chocDn = biasState == -1 and biasState[1] != -1
+var int lastChocBar = 0
 
 // ============================== FILTERS / REGIME =============================
 sessOk      = not useSession or not na(time(timeframe.period, tradeSess, tz))
@@ -197,6 +203,10 @@ var int   nWins    = 0
 var int   nLoss    = 0
 var float grossW   = 0.0
 var float grossL   = 0.0
+var bool  pending  = false
+var int   pendDir  = 0
+var float pendPx   = na
+var int   pendBar  = 0
 
 var box   bxSL    = na
 var box   bxTP    = na
@@ -207,6 +217,8 @@ var label lbTP    = na
 
 longSignal    = false
 shortSignal   = false
+setupSignal   = false
+cancelSignal  = false
 tpHit         = false
 slHit         = false
 forceExitFlag = false
@@ -240,14 +252,48 @@ if barstate.isconfirmed
             inTrade := false
             posDir  := 0
             justClosed := true
-    if not inTrade and not justClosed and (longSetup or shortSetup)
-        posDir  := longSetup ? 1 : -1
-        entryP  := close
-        slP     := longSetup ? slLongCalc : slShortCalc
-        tpP     := longSetup ? tpLongCalc : tpShortCalc
-        inTrade := true
-        longSignal  := longSetup
-        shortSignal := shortSetup
+    // 2) manage a pending limit entry (wait for a better price)
+    if pending and not inTrade
+        bool reached = pendDir == 1 ? low <= pendPx : high >= pendPx
+        bool stillOk = pendDir == 1 ? trendUp : trendDn
+        bool expired = bar_index - pendBar >= entryWaitBars
+        if reached
+            posDir := pendDir
+            entryP := pendPx
+            slP := pendDir == 1 ? math.min(swingLo, pendPx - atr * atrMult) - atr * slBuf : math.max(swingHi, pendPx + atr * atrMult) + atr * slBuf
+            tpP := pendDir == 1 ? pendPx + rr * (pendPx - slP) : pendPx - rr * (slP - pendPx)
+            inTrade := true
+            pending := false
+            longSignal := pendDir == 1
+            shortSignal := pendDir == -1
+        else if expired or not stillOk
+            pending := false
+            cancelSignal := true
+            if expired and stillOk and enterAtMktIfMiss
+                posDir := pendDir
+                entryP := close
+                slP := pendDir == 1 ? math.min(swingLo, close - atr * atrMult) - atr * slBuf : math.max(swingHi, close + atr * atrMult) + atr * slBuf
+                tpP := pendDir == 1 ? close + rr * (close - slP) : close - rr * (slP - close)
+                inTrade := true
+                cancelSignal := false
+                longSignal := pendDir == 1
+                shortSignal := pendDir == -1
+    // 3) arm a new setup
+    if not inTrade and not pending and not justClosed and (longSetup or shortSetup)
+        if usePullback
+            pendDir := longSetup ? 1 : -1
+            pendPx  := close + (longSetup ? -1.0 : 1.0) * entryPullAtr * atr
+            pendBar := bar_index
+            pending := true
+            setupSignal := true
+        else
+            posDir := longSetup ? 1 : -1
+            entryP := close
+            slP    := longSetup ? slLongCalc : slShortCalc
+            tpP    := longSetup ? tpLongCalc : tpShortCalc
+            inTrade := true
+            longSignal  := longSetup
+            shortSignal := shortSetup
 
     // ----- draw / freeze the setup zone (locked at entry, attached to price) -
     if showZones and (longSignal or shortSignal)
@@ -304,12 +350,18 @@ plotshape(shortSignal, "SELL", shape.triangledown, location.abovebar, color.new(
 plotshape(forceExitFlag, "FORCE EXIT", shape.xcross, location.abovebar, color.new(color.fuchsia, 0), text = "EXIT", textcolor = color.white, size = size.tiny)
 plotshape(tpHit, "TP hit", shape.circle, location.belowbar, color.new(color.green, 0), size = size.tiny)
 plotshape(slHit, "SL hit", shape.circle, location.abovebar, color.new(color.red, 0),   size = size.tiny)
+plot(pending ? pendPx : na, "Pending entry", color.new(color.blue, 0), 1, plot.style_circles)
+plotshape(setupSignal, "Setup armed", shape.diamond, location.belowbar, color.new(color.blue, 0), size = size.tiny)
+plotshape(cancelSignal, "Setup cancelled", shape.xcross, location.belowbar, color.new(color.gray, 30), size = size.tiny)
 
-// Direction / change-of-character arrows with support %
-if showChoc and chocUp and barstate.isconfirmed
-    label.new(bar_index, low, "▲ " + str.tostring(confidence) + "%", yloc = yloc.belowbar, style = label.style_label_up, color = color.new(color.teal, 25), textcolor = color.white, size = size.tiny)
-if showChoc and chocDn and barstate.isconfirmed
-    label.new(bar_index, high, "▼ " + str.tostring(confidence) + "%", yloc = yloc.abovebar, style = label.style_label_down, color = color.new(color.maroon, 25), textcolor = color.white, size = size.tiny)
+// Direction / change-of-character arrows + % (bold on a flip, lighter heartbeat otherwise so it's always on screen)
+dueChoc = bar_index - lastChocBar >= chocEvery
+if showChoc and barstate.isconfirmed and biasState == 1 and (chocUp or dueChoc)
+    label.new(bar_index, low, (chocUp ? "▲ " : "▴ ") + str.tostring(confidence) + "%", yloc = yloc.belowbar, style = label.style_label_up, color = color.new(color.teal, chocUp ? 10 : 50), textcolor = color.white, size = size.tiny)
+    lastChocBar := bar_index
+if showChoc and barstate.isconfirmed and biasState == -1 and (chocDn or dueChoc)
+    label.new(bar_index, high, (chocDn ? "▼ " : "▾ ") + str.tostring(confidence) + "%", yloc = yloc.abovebar, style = label.style_label_down, color = color.new(color.maroon, chocDn ? 10 : 50), textcolor = color.white, size = size.tiny)
+    lastChocBar := bar_index
 
 // ============================== DASHBOARD ====================================
 f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
@@ -323,8 +375,8 @@ var table dash = table.new(f_pos(), dashCompact ? 2 : 3, dashCompact ? 9 : 24, b
 // --- Compact "minimap" HUD (tiny, glanceable) -------------------------------
 if showDash and barstate.islast and dashCompact
     cW = color.white
-    cState = inTrade ? (posDir == 1 ? "● LONG" : "● SHORT") : takeTrade ? (longSetup ? "BUY" : "SELL") : "WAIT"
-    cCol = inTrade ? (posDir == 1 ? color.new(color.green, 20) : color.new(color.red, 20)) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 45)
+    cState = inTrade ? (posDir == 1 ? "● LONG" : "● SHORT") : pending ? (pendDir == 1 ? "▸buy?" : "▸sell?") : takeTrade ? (longSetup ? "BUY" : "SELL") : "WAIT"
+    cCol = inTrade ? (posDir == 1 ? color.new(color.green, 20) : color.new(color.red, 20)) : pending ? color.new(color.blue, 30) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 45)
     table.cell(dash, 0, 0, "⚡APEX", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.tiny)
     table.cell(dash, 1, 0, str.tostring(confidence) + "%", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.tiny)
     table.cell(dash, 0, 1, "sig", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
@@ -416,6 +468,9 @@ if shortSignal
     alert("APEX SELL " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | 1:" + str.tostring(rr, "#.#"), alert.freq_once_per_bar_close)
 if forceExitFlag
     alert("APEX FORCE EXIT " + syminfo.ticker + " @ " + str.tostring(close, "#.##"), alert.freq_once_per_bar_close)
+if setupSignal
+    alert("APEX SETUP " + syminfo.ticker + " " + (pendDir == 1 ? "LONG" : "SHORT") + " — waiting for entry near " + str.tostring(pendPx, "#.##"), alert.freq_once_per_bar_close)
+alertcondition(setupSignal,   "Apex Setup Forming","Apex setup forming")
 alertcondition(longSignal,    "Apex Long Entry",  "Apex BUY")
 alertcondition(shortSignal,   "Apex Short Entry", "Apex SELL")
 alertcondition(forceExitFlag, "Apex Force Exit",  "Apex FORCE EXIT")
