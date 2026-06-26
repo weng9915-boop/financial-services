@@ -22,7 +22,7 @@ indicator("Apex Trend-Pullback AI [XAUUSD]", "ApexTP", overlay = true,
 
 // ============================== INPUTS =======================================
 gC = "① Core"
-rr           = input.float(2.0,  "Reward : Risk  (1 : X)", minval = 0.5, step = 0.1, group = gC, tooltip = "Take-profit = stop distance × this. 2.0 = your requested 1:2.")
+rr           = input.float(1.5,  "Reward : Risk  (1 : X)", minval = 0.5, step = 0.1, group = gC, tooltip = "TP = stop distance × this. Lowered to 1.5 so TP is more reachable (you were hitting SL before TP). Try 1.2-2.0.")
 sigThresh    = input.float(2.5,  "Min confluence score (confirm)", minval = 0.0, step = 0.5, group = gC, tooltip = "Trend + pullback is the edge; this just makes sure the indicators don't disagree.")
 useAdaptive  = input.bool(true,  "Adaptive: tighten after losing streak", group = gC)
 adaptWindow  = input.int(20,     "Adaptive look-back (last N trades)", minval = 5, maxval = 200, group = gC)
@@ -36,24 +36,27 @@ emaSlowLen   = input.int(50,  "EMA slow", minval = 1, group = gE)
 emaBiasLen   = input.int(200, "EMA bias (long-term)", minval = 1, group = gE)
 useHTF       = input.bool(true, "Higher-timeframe trend filter", group = gE)
 htfRes       = input.timeframe("15", "Higher timeframe", group = gE)
-useDayBias   = input.bool(true, "Trade with the day's direction only", group = gE)
+useDayBias   = input.bool(true, "Trade with higher-TF direction only", group = gE)
+biasTF       = input.timeframe("60", "  Direction timeframe (60=1H, 240=4H)", group = gE)
 pullLook     = input.int(6,   "Pullback look-back (bars)", minval = 1, group = gE)
 pullAtr      = input.float(0.5, "Pullback must reach EMA ± (× ATR)", minval = 0.0, step = 0.1, group = gE)
-usePullback  = input.bool(true, "Wait for a pullback for a better entry", group = gE, tooltip = "After a setup, wait for price to retrace a little toward you (lower for long / higher for short) so the SL distance is smaller and the first wiggle is less likely to tag it. ALWAYS fills: takes it at market after N bars if no pullback comes, so you never miss a trade.")
-entryPullAtr = input.float(0.25, "  Pullback offset (× ATR)", minval = 0.0, step = 0.05, group = gE)
-entryWaitBars= input.int(4,    "  Take it at market if no pullback in N bars", minval = 1, group = gE)
+strictConfirm= input.bool(false, "Strict confirm: close beyond prior bar", group = gE, tooltip = "Optional. Entry bar must close above the prior bar's high (long) / below its low (short) — a real resumption. Filters weak / wrong-direction setups. Turn ON and compare win-rate.")
+usePullback  = input.bool(false, "Wait for a better entry price (limit) — leave OFF", group = gE, tooltip = "OFF by default: on a trend-CONTINUATION system a limit entry adversely selects losers (it fills setups where price first moved AGAINST you, and misses the clean ones that ran immediately). The real fix for stop-hunt tags is the wider stop buffer in ③.")
+entryPullAtr = input.float(0.4, "  Better-entry offset (× ATR)", minval = 0.0, step = 0.1, group = gE)
+entryWaitBars= input.int(5,    "  Cancel setup if not filled in N bars", minval = 1, group = gE)
+enterAtMktIfMiss = input.bool(false, "  Enter at market if pullback missed", group = gE)
 
 gStop = "③ Stop & target (structure)"
 atrLen       = input.int(14,  "ATR length", minval = 1, group = gStop)
 atrMult      = input.float(1.0, "Min stop = ATR ×", minval = 0.1, step = 0.1, group = gStop, tooltip = "Stop is the FURTHER of: beyond the swing, or this ATR floor.")
 slLook       = input.int(10,  "Swing look-back for stop", minval = 1, group = gStop)
-slBuf        = input.float(0.3, "Stop buffer beyond swing (× ATR)", minval = 0.0, step = 0.1, group = gStop)
+slBuf        = input.float(0.8, "Stop buffer beyond swing (× ATR) — STRETCHED", minval = 0.0, step = 0.1, group = gStop, tooltip = "Stretched to 0.8 so the stop sits further BEYOND the liquidity (swing) — harder to stop-hunt before price runs to TP. Bigger = safer but farther TP. Try 0.7-1.5.")
 
 gExit = "④ Early exit"
 useForceExit = input.bool(false, "Force-exit if trend flips (else pure SL/TP)", group = gExit)
-useTimeStop  = input.bool(true, "Time stop: exit a trade that goes nowhere", group = gExit, tooltip = "Closes a trade that hasn't hit SL or TP after N bars — kills the stuck-for-hours problem.")
+useTimeStop  = input.bool(true, "Time stop: exit a trade that goes nowhere", group = gExit, tooltip = "Closes a trade that hasn't hit SL or TP after N bars — kills the 'stuck for hours in a dead market' problem.")
 maxBarsInTrade = input.int(120, "  Max bars in trade (120 = 2h on 1m)", minval = 5, group = gExit)
-useStallExit = input.bool(true, "Volatility/volume stall exit", group = gExit, tooltip = "Closes a trade when ATR (volatility, which tracks volume) collapses below a fraction of the ATR at entry — market went quiet, price won't reach either level.")
+useStallExit = input.bool(true, "Volatility/volume stall exit", group = gExit, tooltip = "Closes a trade when ATR (volatility, which tracks volume) collapses below a fraction of the ATR at entry — i.e. the market went quiet and price won't reach either level.")
 stallAtrFrac = input.float(0.5, "  Exit if ATR falls below × entry-ATR", minval = 0.1, maxval = 1.0, step = 0.05, group = gExit)
 
 gConf = "⑤ Confirmation indicators (score)"
@@ -73,6 +76,8 @@ stAtr        = input.int(10,  "Supertrend ATR", minval = 1, group = gConf)
 pivLeft      = input.int(10, "Pivot left",  minval = 1, group = gConf)
 pivRight     = input.int(5,  "Pivot right", minval = 1, group = gConf)
 srAtr        = input.float(0.6, "S/R proximity (× ATR)", minval = 0.1, step = 0.1, group = gConf)
+useTwoPole   = input.bool(true, "Require Two-Pole CHoCH confirmation", group = gConf, tooltip = "Two-Pole Oscillator (BigBeluga). Only go long when its momentum is rising (bullish change-of-character), short when falling. If it disagrees with the trade direction, the entry is SKIPPED — your fakeout / is-the-turn-real check.")
+twoPoleLen   = input.int(15, "  Two-Pole filter length", minval = 1, group = gConf)
 
 gN = "⑥ Sessions / News blackout"
 tz           = input.string("GMT", "Timezone", group = gN)
@@ -87,13 +92,13 @@ wEma=input.float(1.5,"EMA fast/slow",minval=0,step=0.1,group=gW)
 wBias=input.float(1.0,"EMA bias",minval=0,step=0.1,group=gW)
 wHtf=input.float(1.5,"HTF trend",minval=0,step=0.1,group=gW)
 wAdx=input.float(1.0,"ADX/DMI",minval=0,step=0.1,group=gW)
-wRsi=input.float(1.0,"RSI",minval=0,step=0.1,group=gW)
+wRsi=input.float(0.0,"RSI (off: conflicts w/ pullback)",minval=0,step=0.1,group=gW)
 wMacd=input.float(1.0,"MACD",minval=0,step=0.1,group=gW)
-wStoch=input.float(0.5,"Stochastic",minval=0,step=0.1,group=gW)
+wStoch=input.float(0.0,"Stochastic (off: conflicts)",minval=0,step=0.1,group=gW)
 wVol=input.float(1.0,"Volume",minval=0,step=0.1,group=gW)
 wVwap=input.float(1.0,"VWAP",minval=0,step=0.1,group=gW)
 wSt=input.float(1.5,"Supertrend",minval=0,step=0.1,group=gW)
-wBb=input.float(0.5,"Bollinger",minval=0,step=0.1,group=gW)
+wBb=input.float(0.0,"Bollinger (off: conflicts)",minval=0,step=0.1,group=gW)
 wSR=input.float(1.0,"S/R",minval=0,step=0.1,group=gW)
 
 gD = "⑧ Display"
@@ -102,9 +107,9 @@ dashPos    = input.string("Top Right", "Position", options = ["Top Right","Top L
 dashCompact= input.bool(true, "Compact minimap dashboard", group = gD)
 showZones  = input.bool(true, "Draw entry / SL / TP zones", group = gD)
 showSR     = input.bool(true, "Plot S/R staircase", group = gD)
-showChoc   = input.bool(true, "Direction / change-of-character arrows + %", group = gD, tooltip = "Plots up/down with the support % (low = likely fakeout, high = stronger). Info only, NOT entries.")
-chocThresh = input.float(1.5, "  CHoCH flip threshold (deadband)", minval = 0.0, step = 0.5, group = gD)
-chocEvery  = input.int(5, "  Re-show direction every N bars", minval = 1, group = gD)
+showChoc   = input.bool(true, "Direction / change-of-character arrows + %", group = gD, tooltip = "Plots ▲up/▼down when net confluence flips, with the support % (low % = likely fakeout, high % = stronger conviction). These are NOT entries — just a read on direction so you can hold or bail a setup.")
+chocThresh = input.float(1.5, "  CHoCH flip threshold (score deadband)", minval = 0.0, step = 0.5, group = gD)
+chocEvery  = input.int(5, "  Re-show direction every N bars", minval = 1, group = gD, tooltip = "Keeps an up/down % read on screen even without a flip. Lower = more frequent.")
 
 // ============================== CALCULATIONS =================================
 emaFast = ta.ema(close, emaFastLen)
@@ -124,7 +129,7 @@ relVol  = volume / math.max(ta.sma(volume, volLen), 1)
 htfClose = request.security(syminfo.tickerid, htfRes, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 htfEma   = request.security(syminfo.tickerid, htfRes, ta.ema(close, emaFastLen)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 htfBull  = htfClose > htfEma
-dayOpen  = request.security(syminfo.tickerid, "D", open, lookahead = barmerge.lookahead_off)
+dayOpen  = request.security(syminfo.tickerid, biasTF, open, lookahead = barmerge.lookahead_off)
 dayUp    = close >= dayOpen
 
 ph = ta.pivothigh(high, pivLeft, pivRight)
@@ -171,8 +176,28 @@ trendDn = emaFast < emaSlow and close < emaBias and (not useHTF or not htfBull) 
 // pullback to the fast EMA within the look-back, then close back through it
 pbLong   = ta.lowest(low,  pullLook) <= emaFast + atr * pullAtr
 pbShort  = ta.highest(high, pullLook) >= emaFast - atr * pullAtr
-confLong = close > open and close > emaFast
-confShort= close < open and close < emaFast
+confLong = close > open and close > emaFast and (not strictConfirm or close > high[1])
+confShort= close < open and close < emaFast and (not strictConfirm or close < low[1])
+
+// ----- Two-Pole Oscillator (BigBeluga) — momentum change-of-character ------
+f_twoPole(src, len) =>
+    var float s1 = na
+    var float s2 = na
+    a = 2.0 / (len + 1)
+    s1 := na(s1) ? src : (1 - a) * s1 + a * src
+    s2 := na(s2) ? s1 : (1 - a) * s2 + a * s1
+    s2
+tpSma  = ta.sma(close, 25)
+tpSd   = ta.stdev(close - tpSma, 25)
+tpNorm = tpSd == 0 ? 0.0 : ((close - tpSma) - ta.sma(close - tpSma, 25)) / tpSd
+two_p  = f_twoPole(tpNorm, twoPoleLen)
+two_pp = two_p[4]
+tpBull = two_p > two_pp
+tpBear = two_p < two_pp
+tpBuyEvent  = ta.crossover(two_p, two_pp)  and two_p < 0 and barstate.isconfirmed
+tpSellEvent = ta.crossunder(two_p, two_pp) and two_p > 0 and barstate.isconfirmed
+tpOkLong  = not useTwoPole or tpBull
+tpOkShort = not useTwoPole or tpBear
 
 // ============================== ADAPTIVE THRESHOLD ===========================
 var array<float> recent = array.new<float>()
@@ -192,8 +217,8 @@ tpLongCalc  = close + rr * riskLongCalc
 tpShortCalc = close - rr * riskShortCalc
 
 // ============================== SETUP TRIGGERS ===============================
-longSetup  = trendUp and pbLong  and confLong  and score >=  adaptThresh and sessOk and not newsBlackout and afterStart
-shortSetup = trendDn and pbShort and confShort and score <= -adaptThresh and sessOk and not newsBlackout and afterStart
+longSetup  = trendUp and pbLong  and confLong  and tpOkLong  and score >=  adaptThresh and sessOk and not newsBlackout and afterStart
+shortSetup = trendDn and pbShort and confShort and tpOkShort and score <= -adaptThresh and sessOk and not newsBlackout and afterStart
 
 // ============================== TRADE STATE MACHINE ==========================
 var bool  inTrade  = false
@@ -221,10 +246,11 @@ var label lbTP    = na
 
 longSignal    = false
 shortSignal   = false
+setupSignal   = false
+cancelSignal  = false
 tpHit         = false
 slHit         = false
 forceExitFlag = false
-setupSignal   = false
 stallExit     = false
 
 if barstate.isconfirmed
@@ -261,19 +287,32 @@ if barstate.isconfirmed
             inTrade := false
             posDir  := 0
             justClosed := true
-    // 2) manage a pending pullback entry — fill at the better price, or market after N bars
+    // 2) manage a pending limit entry (wait for a better price)
     if pending and not inTrade
         bool reached = pendDir == 1 ? low <= pendPx : high >= pendPx
-        bool timeoutNow = bar_index - pendBar >= entryWaitBars
-        if reached or timeoutNow
+        bool stillOk = pendDir == 1 ? trendUp : trendDn
+        bool expired = bar_index - pendBar >= entryWaitBars
+        if reached
             posDir := pendDir
-            entryP := reached ? pendPx : close
-            slP := pendDir == 1 ? math.min(swingLo, entryP - atr * atrMult) - atr * slBuf : math.max(swingHi, entryP + atr * atrMult) + atr * slBuf
-            tpP := pendDir == 1 ? entryP + rr * (entryP - slP) : entryP - rr * (slP - entryP)
+            entryP := pendPx
+            slP := pendDir == 1 ? math.min(swingLo, pendPx - atr * atrMult) - atr * slBuf : math.max(swingHi, pendPx + atr * atrMult) + atr * slBuf
+            tpP := pendDir == 1 ? pendPx + rr * (pendPx - slP) : pendPx - rr * (slP - pendPx)
             inTrade := true
             pending := false
             longSignal := pendDir == 1
             shortSignal := pendDir == -1
+        else if expired or not stillOk
+            pending := false
+            cancelSignal := true
+            if expired and stillOk and enterAtMktIfMiss
+                posDir := pendDir
+                entryP := close
+                slP := pendDir == 1 ? math.min(swingLo, close - atr * atrMult) - atr * slBuf : math.max(swingHi, close + atr * atrMult) + atr * slBuf
+                tpP := pendDir == 1 ? close + rr * (close - slP) : close - rr * (slP - close)
+                inTrade := true
+                cancelSignal := false
+                longSignal := pendDir == 1
+                shortSignal := pendDir == -1
     // 3) arm a new setup
     if not inTrade and not pending and not justClosed and (longSetup or shortSetup)
         if usePullback
@@ -334,7 +373,7 @@ lean      = score > 0 ? 1 : score < 0 ? -1 : 0
 cDir      = lean == 1 ? trendUp : lean == -1 ? trendDn : false
 cPull     = lean == 1 ? pbLong and confLong : lean == -1 ? pbShort and confShort : false
 takeTrade = longSetup or shortSetup
-dayTxt    = dayUp ? "UP day" : "DOWN day"
+dayTxt    = (dayUp ? "UP " : "DOWN ") + biasTF
 pullTxt   = (lean == 1 ? (pbLong ? (confLong ? "pullback+confirm" : "pullback, no confirm") : "no pullback") : lean == -1 ? (pbShort ? (confShort ? "pullback+confirm" : "pullback, no confirm") : "no pullback") : "—")
 riskNow   = inTrade ? math.abs(entryP - slP) : (lean == 1 ? riskLongCalc : riskShortCalc)
 
@@ -353,7 +392,10 @@ plotshape(tpHit, "TP hit", shape.circle, location.belowbar, color.new(color.gree
 plotshape(slHit, "SL hit", shape.circle, location.abovebar, color.new(color.red, 0),   size = size.tiny)
 plot(pending ? pendPx : na, "Pending entry", color.new(color.blue, 0), 1, plot.style_circles)
 plotshape(setupSignal, "Setup armed", shape.diamond, location.belowbar, color.new(color.blue, 0), size = size.tiny)
-plotshape(stallExit, "Stall/time exit", shape.square, location.abovebar, color.new(color.gray, 0), text = "T", textcolor = color.white, size = size.tiny)
+plotshape(cancelSignal, "Setup cancelled", shape.xcross, location.belowbar, color.new(color.gray, 30), size = size.tiny)
+plotshape(stallExit, "Stall/time exit", shape.square, location.abovebar, color.new(color.gray, 0), text = "⏱", textcolor = color.white, size = size.tiny)
+plotshape(tpBuyEvent,  "2Pole bull CHoCH", shape.triangleup,   location.bottom, color.new(#55ffda, 0), size = size.tiny)
+plotshape(tpSellEvent, "2Pole bear CHoCH", shape.triangledown, location.top,    color.new(#8c5bff, 0), size = size.tiny)
 
 // Direction / change-of-character arrows + % (bold on a flip, lighter heartbeat otherwise so it's always on screen)
 dueChoc = bar_index - lastChocBar >= chocEvery
@@ -376,8 +418,8 @@ var table dash = table.new(f_pos(), dashCompact ? 2 : 3, dashCompact ? 9 : 24, b
 // --- Compact "minimap" HUD (tiny, glanceable) -------------------------------
 if showDash and barstate.islast and dashCompact
     cW = color.white
-    cState = inTrade ? (posDir == 1 ? "● LONG" : "● SHORT") : takeTrade ? (longSetup ? "BUY" : "SELL") : "WAIT"
-    cCol = inTrade ? (posDir == 1 ? color.new(color.green, 20) : color.new(color.red, 20)) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 45)
+    cState = inTrade ? (posDir == 1 ? "● LONG" : "● SHORT") : pending ? (pendDir == 1 ? "▸buy?" : "▸sell?") : takeTrade ? (longSetup ? "BUY" : "SELL") : "WAIT"
+    cCol = inTrade ? (posDir == 1 ? color.new(color.green, 20) : color.new(color.red, 20)) : pending ? color.new(color.blue, 30) : takeTrade ? color.new(color.green, 30) : color.new(color.gray, 45)
     table.cell(dash, 0, 0, "⚡APEX", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.tiny)
     table.cell(dash, 1, 0, str.tostring(confidence) + "%", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.tiny)
     table.cell(dash, 0, 1, "sig", text_color = color.gray, text_halign = text.align_left, text_size = size.tiny)
@@ -469,12 +511,12 @@ if shortSignal
     alert("APEX SELL " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | 1:" + str.tostring(rr, "#.#"), alert.freq_once_per_bar_close)
 if forceExitFlag
     alert("APEX FORCE EXIT " + syminfo.ticker + " @ " + str.tostring(close, "#.##"), alert.freq_once_per_bar_close)
-if setupSignal
-    alert("APEX SETUP " + syminfo.ticker + " " + (pendDir == 1 ? "LONG" : "SHORT") + " forming — waiting for pullback near " + str.tostring(pendPx, "#.##"), alert.freq_once_per_bar_close)
 if stallExit
     alert("APEX STALL EXIT " + syminfo.ticker + " @ " + str.tostring(close, "#.##") + " — closed (went nowhere / low volume)", alert.freq_once_per_bar_close)
-alertcondition(longSignal,    "Apex Long Entry",  "Apex BUY")
-alertcondition(shortSignal,   "Apex Short Entry", "Apex SELL")
+if setupSignal
+    alert("APEX SETUP " + syminfo.ticker + " " + (pendDir == 1 ? "LONG" : "SHORT") + " — waiting for entry near " + str.tostring(pendPx, "#.##"), alert.freq_once_per_bar_close)
 alertcondition(setupSignal,   "Apex Setup Forming","Apex setup forming")
 alertcondition(stallExit,     "Apex Stall Exit",  "Apex stall/time exit")
+alertcondition(longSignal,    "Apex Long Entry",  "Apex BUY")
+alertcondition(shortSignal,   "Apex Short Entry", "Apex SELL")
 alertcondition(forceExitFlag, "Apex Force Exit",  "Apex FORCE EXIT")
