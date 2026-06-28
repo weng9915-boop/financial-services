@@ -1,5 +1,36 @@
 # Apex trading tools (XAUUSD) — Pine v6
 
+## ⭐⭐ Flagship: `ApexSessionSMC.pine` — Apex Session SMC
+
+**One model, five timeframes.** Pick a **preset** (1m / 5m / 15m / 30m / 1h /
+Auto) and it auto-tunes the whole combo — bias timeframe, EMAs, momentum tool
+(Stochastic on low TFs, CCI on high), session gate, and hold time.
+
+It **enforces the smart-money sequence** — a setup only arms when *all six* are
+true, in order:
+
+1. **Session** — in a tradeable window (kill-zones-only on low TFs).
+2. **Bias** — higher-timeframe trend agrees (HTF EMA + optional EMA stack).
+3. **Sweep** — price raided the **Asia range** liquidity and closed back (manipulation).
+4. **CHoCH** — structure broke the other way (intent revealed).
+5. **Zone + OTE** — price retraced **into an Order Block / FVG** sitting in the
+   **0.62–0.79 fib** (a discount for longs, a premium for shorts).
+6. **Momentum** — Stochastic / CCI turns at the zone.
+
+→ **Execution:** LOCKED entry / SL (beyond the sweep) / TP (fixed RR *or* the
+opposite Asia-range liquidity). **One quality trade per raid**, time + structure
+stop, cooldown. The AND-chain makes setups **rare by design — quality over quantity.**
+
+The dashboard is a **live ①–⑥ checklist** (✓/✗ for each step) ending in a
+`ARM LONG / ARM SHORT / WAIT` verdict, plus the locked levels and an R-based
+self-backtest. Asia range, OB/FVG zones, and the OTE band are drawn on the chart.
+Non-repaint on bar close; phone alerts via `alert()`.
+
+> Sessions are in **UTC** by default — adjust the three session inputs to your
+> feed's clock. The whole method lives or dies on the Asia high/low being right.
+
+---
+
 ## ⭐ 1-minute scalpers — two profiles, built to A/B
 
 Two standalone 1m tools that deliberately trade **different edges**. Run both,
