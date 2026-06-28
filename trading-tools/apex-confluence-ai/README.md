@@ -22,8 +22,11 @@ strong-body, never a doji) is the **trigger**. HTF bias, momentum, and CHoCH are
 **optional filters, off by default** — add them to tighten. Direction = the
 reversal of the sweep (you fade the raid and ride the distribution).
 
-→ **Execution:** LOCKED entry / SL (beyond the swept wick, or fixed-$) / TP (fixed
-RR *or* the opposite pool). Cooldown, opposite-sweep cut, and a time stop.
+→ **Execution:** LOCKED entry / SL (beyond the swept wick with a min-ATR floor, or
+fixed-$). **Target reaches for the furthest pips** — *Trail runner* (breakeven at
++1R then trail the extreme, RR unbounded — captures the whole distribution leg),
+*Furthest pool* (aim at the farthest weekly/daily liquidity), or *Fixed RR*.
+Cooldown, opposite-sweep cut, time stop (off for runners so they run).
 
 The dashboard shows the **current session + live phase**, **today's A/L/N phases**,
 the **next-session expectation**, the entry checklist (pool swept ✓ / candle ✓ /
