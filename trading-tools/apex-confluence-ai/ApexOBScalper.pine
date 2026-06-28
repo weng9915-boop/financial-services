@@ -28,10 +28,10 @@ useHTF   = input.bool(true, "Require HTF trend agreement", group = gH)
 emaLen   = input.int(50, "EMA trend filter", minval = 1, group = gH)
 useEma   = input.bool(true, "Require price on EMA side", group = gH)
 useVwap  = input.bool(true, "Require price on VWAP side", group = gH)
-useAdx   = input.bool(true, "Stand aside in chop (HTF ADX filter)", group = gH, tooltip = "Only trade when the HTF is actually TRENDING. ADX below the minimum = ranging / uncertain = no trades. Fixes 'kept shorting a stale bias in a low-volume range'.")
+useAdx   = input.bool(false, "Stand aside in chop (HTF ADX filter)", group = gH, tooltip = "OFF by default — on gold, ADX lags the start of a move (it green-lights LATE, after price is extended, so entries chase and hit SL) yet still passes in volatile chop. It delayed entries without cutting the bad ones. Leave OFF unless A/B testing shows it helps your range.")
 adxLen   = input.int(14, "  ADX length", minval = 1, group = gH)
 adxMin   = input.float(20, "  Min ADX (trend strength)", minval = 0, group = gH)
-useSlope = input.bool(true, "Require HTF trend to be sloping (fresh bias)", group = gH, tooltip = "The HTF EMA must be actively rising (long) / falling (short) over the look-back, not a leftover bias from a finished trend.")
+useSlope = input.bool(false, "Require HTF trend to be sloping (fresh bias)", group = gH, tooltip = "OFF by default — same lag problem: it waits for the EMA to already be sloping, which delays entry until the move is mature. Use only if you specifically want to suppress flat-bias days and have tested the cost.")
 slopeLook= input.int(10, "  HTF slope look-back (HTF bars)", minval = 1, group = gH)
 
 gZ = "② Support zones (OB / FVG)"
