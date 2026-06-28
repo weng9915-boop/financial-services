@@ -1,185 +1,120 @@
 //@version=6
 // =============================================================================
-//  APEX SESSION SMC  —  XAUUSD  (Asia→London→NY :  sweep → CHoCH → OB/FVG → OTE)
+//  APEX SESSION SMC  —  XAUUSD  (ADAPTIVE phases: detect A/M/D, don't assume it)
 // -----------------------------------------------------------------------------
-//  ONE model, five zoom levels. Pick a TIMEFRAME PRESET and it auto-tunes the
-//  whole combo (bias TF, EMAs, momentum tool, session gate, hold time).
+//  Phases are NOT hard-wired to sessions. Any session can accumulate, manipulate
+//  or distribute. This tool:
+//    • CLASSIFIES every completed session live — Accumulation (ranged),
+//      Manipulation (swept a prior pool and reversed), or Distribution (expanded
+//      directionally).
+//    • COUNTS which session tends to play which role over all history (the
+//      built-in "which session does what" backtest).
+//    • PROJECTS the next session: after accumulation expect a sweep; after a
+//      manipulation expect distribution in the reversal direction; after
+//      distribution expect a pullback.
 //
-//  The ENFORCED sequence — a setup only arms when ALL of these are true, in order:
-//    ① SESSION   : in a tradeable window (kill zones only on low TFs).
-//    ② BIAS      : higher-timeframe trend agrees (HTF EMA + optional EMA stack).
-//    ③ SWEEP     : price raided Asia liquidity and closed back (manipulation).
-//    ④ CHoCH     : structure broke the other way (intent revealed).
-//    ⑤ ZONE+OTE  : price retraced INTO an Order Block / FVG sitting in the
-//                  0.62–0.79 fib (a discount for longs, premium for shorts).
-//    ⑥ MOMENTUM  : Stochastic (low TFs) or CCI (high TFs) turns at the zone.
-//  → EXECUTION   : LOCKED entry / SL (beyond the sweep) / TP (RR or opposite
-//                  liquidity). One quality trade per raid. Time + structure stop.
-//
-//  Quality over quantity by design — the AND-chain makes setups rare.
-//  Non-repaint on bar close. Tick volume on most gold feeds. Not financial advice.
+//  ENTRY (loose enough to actually fire): a LIQUIDITY POOL is swept and reclaimed
+//  (the manipulation, happening now) + a confirming CANDLESTICK is the trigger.
+//  HTF bias / momentum / CHoCH are OPTIONAL filters (off by default) you add to
+//  tighten. LOCKED entry / SL (beyond the sweep) / TP. Non-repaint on bar close.
+//  Not financial advice.
 // =============================================================================
 
 indicator("Apex Session SMC [XAUUSD]", "ApexSMC", overlay = true,
-     max_boxes_count = 100, max_lines_count = 100, max_labels_count = 200)
+     max_boxes_count = 60, max_lines_count = 80, max_labels_count = 200)
 
-// ============================== ① PRESET =====================================
-gP = "① Timeframe preset"
-preset  = input.string("Auto", "Preset (auto-tunes everything)", options = ["Auto","1m","5m","15m","30m","1h"], group = gP, tooltip = "Auto = derive from the chart timeframe. Sets bias TF, EMAs, momentum tool, session gate and hold time for that interval.")
-momMode = input.string("Auto", "Momentum tool", options = ["Auto","Stochastic","CCI"], group = gP, tooltip = "Auto = Stochastic on 1m/5m, CCI on 15m/30m/1h.")
-sessMode= input.string("Auto", "Session gate", options = ["Auto","Kill zones only","Any session"], group = gP, tooltip = "Auto = kill-zones-only on 1m/5m (gold's chop is brutal there), any session on higher TFs.")
+// ============================== HELPERS ======================================
+f_swLo(float p) => not na(p) and low  < p and close > p   // swept a low pool and reclaimed
+f_swHi(float p) => not na(p) and high > p and close < p   // swept a high pool and reclaimed
+f_phase(float o, float h, float l, float c, float pHi, float pLo, float refR) =>
+    float rng = h - l
+    bool swHi = not na(pHi) and h > pHi and c < pHi
+    bool swLo = not na(pLo) and l < pLo and c > pLo
+    bool manip = swHi or swLo
+    bool directional = rng > 0 and math.abs(c - o) > 0.6 * rng
+    bool big = na(refR) or rng > 1.2 * refR
+    string ph = manip ? "Manip" : (big and directional) ? "Distrib" : "Accum"
+    int dr = swHi ? -1 : swLo ? 1 : (c > o ? 1 : -1)
+    [ph, dr]
+f_chk(bool b) => b ? "✓" : "✗"
 
-// ============================== ② STRUCTURE ==================================
-gB = "② Bias & structure"
-useEmaBias = input.bool(true, "Also require EMA stack to agree", group = gB)
-pivLen     = input.int(3, "CHoCH swing sensitivity", minval = 1, group = gB, tooltip = "Pivot look-back for the minor swing whose break = change of character. Smaller = earlier/looser CHoCH.")
-armBars    = input.int(20, "Setup stays armed for (bars)", minval = 2, group = gB, tooltip = "After a sweep/CHoCH, how long the setup remains valid waiting for the retrace.")
+// ============================== ① SESSIONS ===================================
+gS = "① Sessions (UTC — adjust to your feed)"
+asiaSess  = input.session("2300-0700", "Asia window", group = gS)
+lonSess   = input.session("0700-1200", "London window", group = gS)
+nySess    = input.session("1200-2100", "New York window", group = gS)
+sessMode  = input.string("Any", "Trade in", options = ["Any","Kill zones only"], group = gS, tooltip = "Any = trade whichever session is manipulating. Kill zones = London + NY only.")
 
-// ============================== ③ SESSIONS ===================================
-gS = "③ Sessions (UTC — adjust to your feed)"
-asiaSess  = input.session("2300-0700", "Asia (accumulation)", group = gS, tooltip = "The range whose high/low become the liquidity pools London raids.")
-londonSess= input.session("0700-1000", "London kill zone (manipulation)", group = gS)
-nySess    = input.session("1200-1500", "New York kill zone (distribution)", group = gS)
+// ============================== ② PHASE DETECTION ============================
+gF = "② Phase detection"
+expandMult = input.float(1.2, "Distribution range ≥ avg ×", minval = 1.0, step = 0.1, group = gF, tooltip = "A session counts as Distribution (expansion) when its range exceeds this × the rolling average session range.")
+dirThresh  = input.float(0.6, "Directional body ≥ range ×", minval = 0.1, maxval = 1.0, step = 0.05, group = gF)
 
-// ============================== ④ ZONES / OTE ================================
-gZ = "④ Zones (OB / FVG) & OTE"
-atrLen   = input.int(14, "ATR length", minval = 1, group = gZ)
-dispMult = input.float(1.0, "Order-block impulse ≥ ATR ×", minval = 0.1, step = 0.1, group = gZ)
-useFVG   = input.bool(true, "Also use Fair-Value-Gap zones", group = gZ)
-obMaxAge = input.int(60, "Zone max age (bars)", minval = 5, group = gZ)
-requireOTE = input.bool(true, "Require entry in 0.62–0.79 OTE", group = gZ, tooltip = "Only enter when the retrace reaches the optimal-trade-entry band (a real discount/premium), not the shallow pullback.")
-oteDeep  = input.float(0.62, "  OTE start (discount/premium)", minval = 0.1, maxval = 0.99, step = 0.01, group = gZ)
-oteMax   = input.float(0.79, "  OTE end", minval = 0.1, maxval = 1.0, step = 0.01, group = gZ)
+// ============================== ③ ENTRY ======================================
+gE = "③ Entry — sweep + candle"
+usePoolSess = input.bool(true, "Pool: last completed session H/L", group = gE)
+usePoolPD   = input.bool(true, "Pool: prev day H/L", group = gE)
+usePoolPW   = input.bool(true, "Pool: prev week H/L", group = gE)
+usePoolAsia = input.bool(true, "Pool: today's Asia H/L", group = gE)
+useCandle   = input.bool(true, "Require a confirming candlestick", group = gE, tooltip = "The trigger: entry bar must be engulfing / pin-rejection / strong-body, not a doji.")
+wickMult    = input.float(2.0, "  Pin wick ≥ body ×", minval = 0.5, step = 0.1, group = gE)
+requireBias = input.bool(false, "Filter: HTF trend must agree", group = gE)
+biasTF      = input.timeframe("60", "  HTF timeframe", group = gE)
+requireMom  = input.bool(false, "Filter: momentum must agree", group = gE)
+momTool     = input.string("Stochastic", "  Momentum tool", options = ["Stochastic","CCI"], group = gE)
+requireChoch= input.bool(false, "Filter: CHoCH must confirm", group = gE)
+pivLen      = input.int(3, "  CHoCH swing sensitivity", minval = 1, group = gE)
 
-// ============================== ⑤ EXECUTION ==================================
-gR = "⑤ Execution — locked levels"
+// ============================== ④ EXECUTION ==================================
+gR = "④ Execution — locked levels"
+atrLen   = input.int(14, "ATR length", minval = 1, group = gR)
 stopMode = input.string("Beyond sweep + ATR", "Stop placement", options = ["Beyond sweep + ATR","Fixed $"], group = gR)
 slDist   = input.float(10.0, "  Fixed $ stop distance", minval = 0.1, step = 0.5, group = gR)
-slBuf    = input.float(0.3, "  Sweep/OB buffer × ATR", minval = 0, step = 0.1, group = gR)
-tgtMode  = input.string("Fixed RR", "Target", options = ["Fixed RR","Opposite liquidity"], group = gR, tooltip = "Fixed RR = stop distance × RR. Opposite liquidity = the other side of the Asia range (falls back to RR if it's too close).")
+slBuf    = input.float(0.3, "  Sweep buffer × ATR", minval = 0, step = 0.1, group = gR)
+tgtMode  = input.string("Fixed RR", "Target", options = ["Fixed RR","Opposite pool"], group = gR)
 rr       = input.float(3.0, "Reward : Risk (1 : X)", minval = 0.5, step = 0.5, group = gR)
 cooldownBars = input.int(10, "Cooldown after a trade (bars)", minval = 0, group = gR)
-oncePerSweep = input.bool(true, "One trade per liquidity raid", group = gR, tooltip = "After taking a setup off a sweep, disarm it so the same raid isn't traded twice.")
-useFailExit  = input.bool(true, "Cut if structure flips (opposite CHoCH)", group = gR)
-useTimeStop  = input.bool(true, "Time stop (preset-tuned)", group = gR)
-maxBarsOv    = input.int(0, "  Time-stop override (0 = preset)", minval = 0, group = gR)
+useFailExit  = input.bool(true, "Cut on opposite sweep", group = gR)
+useTimeStop  = input.bool(true, "Time stop", group = gR)
+maxBars      = input.int(40, "  Max bars in trade", minval = 1, group = gR)
 
-// ============================== ⑦ FINAL CONFIRMATION =========================
-gC = "⑦ Final confirmation — candles + key levels"
-useCandle = input.bool(true, "Require a confirming candlestick", group = gC, tooltip = "THE key execution filter. The entry bar must be a real reaction candle — engulfing, pin/rejection, or strong-body — not a doji or a limp push. A signal without a good candle is skipped.")
-wickMult  = input.float(2.0, "  Pin/rejection wick ≥ body ×", minval = 0.5, step = 0.1, group = gC)
-useLevel  = input.bool(true, "Require a key level at the entry", group = gC, tooltip = "Entry must be within tolerance of a key level (prev day/week H/L/close, daily pivot, session VWAP, round number). Turns a good setup into an A+. Widen the tolerance or turn this off if too strict.")
-levelTolA = input.float(0.5, "  Level tolerance × ATR", minval = 0.05, step = 0.05, group = gC)
-usePDHL   = input.bool(true, "  Prev day H / L / Close", group = gC)
-usePWHL   = input.bool(true, "  Prev week H / L", group = gC)
-usePiv    = input.bool(true, "  Daily pivots (P / R1 / S1)", group = gC)
-useVWAPlv = input.bool(true, "  Session VWAP", group = gC)
-useRound  = input.bool(true, "  Round numbers", group = gC)
-roundStep = input.float(50.0, "    Round step ($)", minval = 1, group = gC)
-
-// ============================== ⑧ DISPLAY ====================================
-gD = "⑧ Display"
-showDash = input.bool(true, "Show dashboard / checklist", group = gD)
+// ============================== ⑤ DISPLAY ====================================
+gD = "⑤ Display"
+showDash = input.bool(true, "Show dashboard", group = gD)
 dashPos  = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
-showZones= input.bool(true, "Draw OB/FVG zones", group = gD)
-drawLevels = input.bool(true, "Draw key levels", group = gD)
-drawAsia = input.bool(true, "Draw Asia range", group = gD)
-drawOTE  = input.bool(true, "Draw OTE band of the armed leg", group = gD)
-
-// ============================== PRESET RESOLUTION ============================
-autoTf = timeframe.in_seconds() <= 60 ? "1m" : timeframe.in_seconds() <= 300 ? "5m" : timeframe.in_seconds() <= 900 ? "15m" : timeframe.in_seconds() <= 1800 ? "30m" : "1h"
-tf = preset == "Auto" ? autoTf : preset
-
-biasTF = switch tf
-    "1m"  => "15"
-    "5m"  => "60"
-    "15m" => "240"
-    "30m" => "D"
-    => "D"
-emaF = switch tf
-    "1m" => 9
-    "5m" => 20
-    => 50
-emaS = switch tf
-    "1m" => 21
-    "5m" => 50
-    => 200
-tStopDef = switch tf
-    "1m"  => 30
-    "5m"  => 24
-    "15m" => 16
-    "30m" => 12
-    => 10
-autoStoch = tf == "1m" or tf == "5m"
-autoKZ    = tf == "1m" or tf == "5m"
-
-useStoch = momMode == "Stochastic" or (momMode == "Auto" and autoStoch)
-kzOnly   = sessMode == "Kill zones only" or (sessMode == "Auto" and autoKZ)
-tStop    = maxBarsOv > 0 ? maxBarsOv : tStopDef
+drawLevels = input.bool(true, "Draw key levels / pools", group = gD)
 
 // ============================== CALCULATIONS =================================
-atr     = ta.atr(atrLen)
-emaFast = ta.ema(close, emaF)
-emaSlow = ta.ema(close, emaS)
+atr = ta.atr(atrLen)
 
+// key levels / pools
+pdh = request.security(syminfo.tickerid, "D", high[1],  lookahead = barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],   lookahead = barmerge.lookahead_on)
+pwh = request.security(syminfo.tickerid, "W", high[1],  lookahead = barmerge.lookahead_on)
+pwl = request.security(syminfo.tickerid, "W", low[1],   lookahead = barmerge.lookahead_on)
+
+// optional HTF bias
 htfClose = request.security(syminfo.tickerid, biasTF, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 htfEma   = request.security(syminfo.tickerid, biasTF, ta.ema(close, 50)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
-biasBull = htfClose > htfEma and (not useEmaBias or emaFast > emaSlow)
-biasBear = htfClose < htfEma and (not useEmaBias or emaFast < emaSlow)
+biasBull = htfClose > htfEma
+biasBear = htfClose < htfEma
 
-// ----- sessions --------------------------------------------------------------
-inAsia = not na(time(timeframe.period, asiaSess, "GMT+0"))
-inLon  = not na(time(timeframe.period, londonSess, "GMT+0"))
-inNY   = not na(time(timeframe.period, nySess, "GMT+0"))
-inKZ   = inLon or inNY
-inSessionOK = kzOnly ? inKZ : true
+// optional momentum (state, not a same-bar cross)
+stochK = ta.sma(ta.stoch(close, high, low, 14), 3)
+stochD = ta.sma(stochK, 3)
+cciV   = ta.cci(close, 20)
+momBull = momTool == "CCI" ? cciV > -100 : stochK > stochD
+momBear = momTool == "CCI" ? cciV <  100 : stochK < stochD
 
-// ----- Asia range (the liquidity pools) --------------------------------------
-var float asiaHi = na
-var float asiaLo = na
-newAsia = inAsia and not inAsia[1]
-if newAsia
-    asiaHi := high
-    asiaLo := low
-else if inAsia
-    asiaHi := math.max(asiaHi, high)
-    asiaLo := math.min(asiaLo, low)
-
-// ----- ③ liquidity sweep -----------------------------------------------------
-sweepDn = not na(asiaLo) and low  < asiaLo and close > asiaLo   // swept sell-side → bullish
-sweepUp = not na(asiaHi) and high > asiaHi and close < asiaHi   // swept buy-side  → bearish
-var int   sweptDnBar = na
-var int   sweptUpBar = na
-var float legLoB = na
-var float legHiB = na
-var float legLoS = na
-var float legHiS = na
-if sweepDn
-    sweptDnBar := bar_index
-    legLoB := low
-    legHiB := high
-if sweepUp
-    sweptUpBar := bar_index
-    legHiS := high
-    legLoS := low
-armBull0 = not na(sweptDnBar) and bar_index - sweptDnBar <= armBars
-armBear0 = not na(sweptUpBar) and bar_index - sweptUpBar <= armBars
-if armBull0
-    legLoB := math.min(legLoB, low)
-    legHiB := math.max(legHiB, high)
-if armBear0
-    legHiS := math.max(legHiS, high)
-    legLoS := math.min(legLoS, low)
-
-// ----- ④ change of character -------------------------------------------------
-ph = ta.pivothigh(pivLen, pivLen)
-pl = ta.pivotlow(pivLen, pivLen)
+// optional CHoCH
+ph_ = ta.pivothigh(pivLen, pivLen)
+pl_ = ta.pivotlow(pivLen, pivLen)
 var float lastPH = na
 var float lastPL = na
-if not na(ph)
-    lastPH := ph
-if not na(pl)
-    lastPL := pl
+if not na(ph_)
+    lastPH := ph_
+if not na(pl_)
+    lastPL := pl_
 chochUp = not na(lastPH) and ta.crossover(close, lastPH)
 chochDn = not na(lastPL) and ta.crossunder(close, lastPL)
 var int chochUpBar = na
@@ -188,125 +123,130 @@ if chochUp
     chochUpBar := bar_index
 if chochDn
     chochDnBar := bar_index
-chochArmBull = not na(chochUpBar) and bar_index - chochUpBar <= armBars
-chochArmBear = not na(chochDnBar) and bar_index - chochDnBar <= armBars
+chochArmBull = not na(chochUpBar) and bar_index - chochUpBar <= 20
+chochArmBear = not na(chochDnBar) and bar_index - chochDnBar <= 20
 
-// ----- ⑤ OTE (fib discount / premium) ----------------------------------------
-rangeB = legHiB - legLoB
-rangeS = legHiS - legLoS
-oteHiB = legHiB - oteDeep * rangeB
-oteLoB = legHiB - oteMax  * rangeB
-oteLoS = legLoS + oteDeep * rangeS
-oteHiS = legLoS + oteMax  * rangeS
-inOTE_B = not requireOTE or (rangeB > 0 and close <= oteHiB and close >= oteLoB)
-inOTE_S = not requireOTE or (rangeS > 0 and close >= oteLoS and close <= oteHiS)
+// ----- sessions: in/out + per-session OHLC for the day -----------------------
+inAsia = not na(time(timeframe.period, asiaSess, "GMT+0"))
+inLon  = not na(time(timeframe.period, lonSess,  "GMT+0"))
+inNY   = not na(time(timeframe.period, nySess,   "GMT+0"))
+inSession = inAsia or inLon or inNY
+inKZ      = inLon or inNY
+inSessionOK = sessMode == "Kill zones only" ? inKZ : true
 
-// ----- ⑤ Order Block / FVG zones ---------------------------------------------
-var float demTop = na
-var float demBot = na
-var bool  demOn  = false
-var int   demBar = na
-var float supTop = na
-var float supBot = na
-var bool  supOn  = false
-var int   supBar = na
-strongBull = close > open and (close - open) > dispMult * atr
-strongBear = open > close and (open - close) > dispMult * atr
-if strongBull and close[1] < open[1]
-    demTop := high[1]
-    demBot := low[1]
-    demOn  := true
-    demBar := bar_index - 1
-if strongBear and close[1] > open[1]
-    supTop := high[1]
-    supBot := low[1]
-    supOn  := true
-    supBar := bar_index - 1
-bullFVG = useFVG and low > high[2]
-bearFVG = useFVG and high < low[2]
-if bullFVG
-    demTop := low
-    demBot := high[2]
-    demOn  := true
-    demBar := bar_index
-if bearFVG
-    supTop := low[2]
-    supBot := high
-    supOn  := true
-    supBar := bar_index
-if demOn and (close < demBot or bar_index - demBar > obMaxAge)
-    demOn := false
-if supOn and (close > supTop or bar_index - supBar > obMaxAge)
-    supOn := false
-tapDem = demOn and low  <= demTop and close > demBot
-tapSup = supOn and high >= supBot and close < supTop
+newDay = timeframe.change("D")
 
-// ----- ⑥ momentum ------------------------------------------------------------
-kStoch = ta.sma(ta.stoch(close, high, low, 14), 3)
-dStoch = ta.sma(kStoch, 3)
-stochBull = ta.crossover(kStoch, dStoch) and kStoch < 50
-stochBear = ta.crossunder(kStoch, dStoch) and kStoch > 50
-cci = ta.cci(close, 20)
-cciBull = ta.crossover(cci, -100) or ta.crossover(cci, 0)
-cciBear = ta.crossunder(cci, 100) or ta.crossunder(cci, 0)
-momBull = useStoch ? stochBull : cciBull
-momBear = useStoch ? stochBear : cciBear
+var float asiaO = na
+var float asiaH = na
+var float asiaL = na
+var float asiaC = na
+if inAsia and not inAsia[1]
+    asiaO := open
+    asiaH := high
+    asiaL := low
+    asiaC := close
+else if inAsia
+    asiaH := math.max(asiaH, high)
+    asiaL := math.min(asiaL, low)
+    asiaC := close
 
-// ----- ⑦ key levels (prev session / day / week) ------------------------------
-pdh = request.security(syminfo.tickerid, "D", high[1],  lookahead = barmerge.lookahead_on)
-pdl = request.security(syminfo.tickerid, "D", low[1],   lookahead = barmerge.lookahead_on)
-pdc = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
-pwh = request.security(syminfo.tickerid, "W", high[1],  lookahead = barmerge.lookahead_on)
-pwl = request.security(syminfo.tickerid, "W", low[1],   lookahead = barmerge.lookahead_on)
-pivP  = (pdh + pdl + pdc) / 3
-pivR1 = 2 * pivP - pdl
-pivS1 = 2 * pivP - pdh
-vwapL = ta.vwap
-roundL = math.round(close / roundStep) * roundStep
+var float lonO = na
+var float lonH = na
+var float lonL = na
+var float lonC = na
+if inLon and not inLon[1]
+    lonO := open
+    lonH := high
+    lonL := low
+    lonC := close
+else if inLon
+    lonH := math.max(lonH, high)
+    lonL := math.min(lonL, low)
+    lonC := close
 
-f_near(float price, float tol) =>
-    float best = 1e9
-    string nm = "—"
-    if usePDHL
-        if math.abs(price - pdh) < best
-            best := math.abs(price - pdh)
-            nm := "PDH"
-        if math.abs(price - pdl) < best
-            best := math.abs(price - pdl)
-            nm := "PDL"
-        if math.abs(price - pdc) < best
-            best := math.abs(price - pdc)
-            nm := "PDC"
-    if usePWHL
-        if math.abs(price - pwh) < best
-            best := math.abs(price - pwh)
-            nm := "PWH"
-        if math.abs(price - pwl) < best
-            best := math.abs(price - pwl)
-            nm := "PWL"
-    if usePiv
-        if math.abs(price - pivP) < best
-            best := math.abs(price - pivP)
-            nm := "Pivot"
-        if math.abs(price - pivR1) < best
-            best := math.abs(price - pivR1)
-            nm := "R1"
-        if math.abs(price - pivS1) < best
-            best := math.abs(price - pivS1)
-            nm := "S1"
-    if useVWAPlv and not na(vwapL)
-        if math.abs(price - vwapL) < best
-            best := math.abs(price - vwapL)
-            nm := "VWAP"
-    if useRound
-        if math.abs(price - roundL) < best
-            best := math.abs(price - roundL)
-            nm := "Round"
-    [best <= tol, nm, best]
+var float nyO = na
+var float nyH = na
+var float nyL = na
+var float nyC = na
+if inNY and not inNY[1]
+    nyO := open
+    nyH := high
+    nyL := low
+    nyC := close
+else if inNY
+    nyH := math.max(nyH, high)
+    nyL := math.min(nyL, low)
+    nyC := close
 
-[atLevel, lvlName, lvlDist] = f_near(close, levelTolA * atr)
+// ----- classify each session at its end; roll the "last session"; count roles
+var float lastSessHi = na
+var float lastSessLo = na
+var string lastSessName = "—"
+var string lastSessPhase = "—"
+var int lastSessDir = 0
+var float refRng = na
+var string asiaPhase = "—"
+var string lonPhase  = "—"
+var string nyPhase   = "—"
+var int aA = 0
+var int aM = 0
+var int aD = 0
+var int lA = 0
+var int lM = 0
+var int lD = 0
+var int nA = 0
+var int nM = 0
+var int nD = 0
 
-// ----- ⑦ candlestick confirmation --------------------------------------------
+if newDay
+    asiaPhase := "—"
+    lonPhase := "—"
+    nyPhase := "—"
+
+endAsia = not inAsia and inAsia[1]
+endLon  = not inLon  and inLon[1]
+endNY   = not inNY   and inNY[1]
+
+if endAsia
+    [phA, drA] = f_phase(asiaO, asiaH, asiaL, asiaC, lastSessHi, lastSessLo, refRng)
+    asiaPhase := phA
+    aA := aA + (phA == "Accum" ? 1 : 0)
+    aM := aM + (phA == "Manip" ? 1 : 0)
+    aD := aD + (phA == "Distrib" ? 1 : 0)
+    lastSessHi := asiaH
+    lastSessLo := asiaL
+    lastSessName := "Asia"
+    lastSessPhase := phA
+    lastSessDir := drA
+    refRng := na(refRng) ? asiaH - asiaL : refRng * 0.8 + (asiaH - asiaL) * 0.2
+if endLon
+    [phL, drL] = f_phase(lonO, lonH, lonL, lonC, lastSessHi, lastSessLo, refRng)
+    lonPhase := phL
+    lA := lA + (phL == "Accum" ? 1 : 0)
+    lM := lM + (phL == "Manip" ? 1 : 0)
+    lD := lD + (phL == "Distrib" ? 1 : 0)
+    lastSessHi := lonH
+    lastSessLo := lonL
+    lastSessName := "London"
+    lastSessPhase := phL
+    lastSessDir := drL
+    refRng := na(refRng) ? lonH - lonL : refRng * 0.8 + (lonH - lonL) * 0.2
+if endNY
+    [phN, drN] = f_phase(nyO, nyH, nyL, nyC, lastSessHi, lastSessLo, refRng)
+    nyPhase := phN
+    nA := nA + (phN == "Accum" ? 1 : 0)
+    nM := nM + (phN == "Manip" ? 1 : 0)
+    nD := nD + (phN == "Distrib" ? 1 : 0)
+    lastSessHi := nyH
+    lastSessLo := nyL
+    lastSessName := "NewYork"
+    lastSessPhase := phN
+    lastSessDir := drN
+    refRng := na(refRng) ? nyH - nyL : refRng * 0.8 + (nyH - nyL) * 0.2
+
+expectTxt = lastSessPhase == "Accum" ? "SWEEP likely (manip)" : lastSessPhase == "Manip" ? "DISTRIB " + (lastSessDir == 1 ? "▲ up" : "▼ down") : lastSessPhase == "Distrib" ? "pullback / accum" : "—"
+
+// ----- candlestick trigger ---------------------------------------------------
 bodyC = math.abs(close - open)
 rngC  = high - low
 upWk  = high - math.max(close, open)
@@ -316,14 +256,17 @@ bullEng = close > open and close[1] < open[1] and close >= open[1] and open <= c
 bearEng = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
 bullPin = rngC > 0 and dnWk >= wickMult * bodyC and (high - close) <= 0.45 * rngC
 bearPin = rngC > 0 and upWk >= wickMult * bodyC and (close - low) <= 0.45 * rngC
-bullMar = close > open and bodyC >= dispMult * atr
-bearMar = open > close and bodyC >= dispMult * atr
+bullMar = close > open and bodyC >= 1.0 * atr
+bearMar = open > close and bodyC >= 1.0 * atr
 bullConf = (bullEng or bullPin or bullMar) and not isDoji
 bearConf = (bearEng or bearPin or bearMar) and not isDoji
 cndName = isDoji ? "doji" : (bullEng or bearEng) ? "engulf" : (bullPin or bearPin) ? "pin" : (bullMar or bearMar) ? "strong" : "—"
 
-finalBull = (not useCandle or bullConf) and (not useLevel or atLevel)
-finalBear = (not useCandle or bearConf) and (not useLevel or atLevel)
+// ----- liquidity sweep (the manipulation, in real time) ----------------------
+sweepLoNow = (usePoolSess and f_swLo(lastSessLo)) or (usePoolPD and f_swLo(pdl)) or (usePoolPW and f_swLo(pwl)) or (usePoolAsia and f_swLo(asiaL))
+sweepHiNow = (usePoolSess and f_swHi(lastSessHi)) or (usePoolPD and f_swHi(pdh)) or (usePoolPW and f_swHi(pwh)) or (usePoolAsia and f_swHi(asiaH))
+swLoName = (usePoolSess and f_swLo(lastSessLo)) ? lastSessName + "·L" : (usePoolPD and f_swLo(pdl)) ? "PDL" : (usePoolPW and f_swLo(pwl)) ? "PWL" : (usePoolAsia and f_swLo(asiaL)) ? "Asia·L" : "—"
+swHiName = (usePoolSess and f_swHi(lastSessHi)) ? lastSessName + "·H" : (usePoolPD and f_swHi(pdh)) ? "PDH" : (usePoolPW and f_swHi(pwh)) ? "PWH" : (usePoolAsia and f_swHi(asiaH)) ? "Asia·H" : "—"
 
 // ============================== STATE MACHINE ================================
 var bool  inTrade  = false
@@ -334,7 +277,6 @@ var float tpP      = na
 var float riskDist = na
 var float tradeRR  = na
 var int   entryBar = na
-var int   lossStreak = 0
 var int   lastExitBar = na
 var int   nT = 0
 var int   nW = 0
@@ -350,8 +292,8 @@ tpHit     = false
 slHit     = false
 exitEarly = false
 
-longSetup0  = inSessionOK and biasBull and armBull0 and chochArmBull and tapDem and inOTE_B and momBull and finalBull
-shortSetup0 = inSessionOK and biasBear and armBear0 and chochArmBear and tapSup and inOTE_S and momBear and finalBear
+trigBull = sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull)
+trigBear = sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear)
 
 if barstate.isconfirmed
     if inTrade
@@ -367,11 +309,11 @@ if barstate.isconfirmed
             exitP := tpP
             doExit := true
             tpHit := true
-        else if useFailExit and (dir == 1 ? chochDn : chochUp)
+        else if useFailExit and (dir == 1 ? sweepHiNow : sweepLoNow)
             exitP := close
             doExit := true
             exitEarly := true
-        else if useTimeStop and bar_index - entryBar >= tStop
+        else if useTimeStop and bar_index - entryBar >= maxBars
             exitP := close
             doExit := true
             exitEarly := true
@@ -382,18 +324,13 @@ if barstate.isconfirmed
             sumR := sumR + r
             grW := grW + (r > 0 ? r : 0.0)
             grL := grL + (r < 0 ? -r : 0.0)
-            lossStreak := r > 0 ? 0 : lossStreak + 1
             lastExitBar := bar_index
             inTrade := false
             dir := 0
-    if not inTrade and cooled and (longSetup0 or shortSetup0)
-        dir := longSetup0 ? 1 : -1
+    if not inTrade and cooled and (trigBull or trigBear)
+        dir := trigBull ? 1 : -1
         entryP := close
-        float rawSL = na
-        if dir == 1
-            rawSL := stopMode == "Fixed $" ? entryP - slDist : math.min(nz(legLoB, low), demBot) - slBuf * atr
-        else
-            rawSL := stopMode == "Fixed $" ? entryP + slDist : math.max(nz(legHiS, high), supTop) + slBuf * atr
+        float rawSL = dir == 1 ? (stopMode == "Fixed $" ? entryP - slDist : low - slBuf * atr) : (stopMode == "Fixed $" ? entryP + slDist : high + slBuf * atr)
         float minR = 0.2 * atr
         if dir == 1 and rawSL > entryP - minR
             rawSL := entryP - minR
@@ -402,24 +339,16 @@ if barstate.isconfirmed
         slP := rawSL
         riskDist := math.abs(entryP - slP)
         float tp = entryP + dir * rr * riskDist
-        if tgtMode == "Opposite liquidity"
-            float liq = dir == 1 ? asiaHi : asiaLo
+        if tgtMode == "Opposite pool"
+            float liq = dir == 1 ? (na(lastSessHi) ? pdh : math.max(lastSessHi, pdh)) : (na(lastSessLo) ? pdl : math.min(lastSessLo, pdl))
             if not na(liq) and dir * (liq - entryP) > riskDist
                 tp := liq
         tpP := tp
         tradeRR := math.abs(tpP - entryP) / riskDist
         entryBar := bar_index
         inTrade := true
-        longSig := longSetup0
-        shortSig := shortSetup0
-        if oncePerSweep and dir == 1
-            sweptDnBar := na
-        if oncePerSweep and dir == -1
-            sweptUpBar := na
-        if dir == 1
-            demOn := false
-        if dir == -1
-            supOn := false
+        longSig := trigBull
+        shortSig := trigBear
 
 // ============================== STATS ========================================
 winRate = nT > 0 ? nW / nT * 100 : 0.0
@@ -427,40 +356,14 @@ avgR    = nT > 0 ? sumR / nT : 0.0
 pf      = grL > 0 ? grW / grL : (grW > 0 ? 999.0 : 0.0)
 
 // ============================== DRAWING ======================================
-plot(drawAsia ? asiaHi : na, "Asia high", color.new(color.aqua, 0), 1, plot.style_linebr)
-plot(drawAsia ? asiaLo : na, "Asia low",  color.new(color.aqua, 0), 1, plot.style_linebr)
-plot(emaFast, "EMA fast", color.new(color.orange, 0), 1)
-plot(emaSlow, "EMA slow", color.new(color.blue, 0), 1)
-plot(drawOTE and armBull0 and rangeB > 0 ? oteHiB : na, "OTE 0.62", color.new(color.green, 30), 1, plot.style_linebr)
-plot(drawOTE and armBull0 and rangeB > 0 ? oteLoB : na, "OTE 0.79", color.new(color.green, 30), 1, plot.style_linebr)
-plot(drawOTE and armBear0 and rangeS > 0 ? oteLoS : na, "OTE 0.62s", color.new(color.red, 30), 1, plot.style_linebr)
-plot(drawOTE and armBear0 and rangeS > 0 ? oteHiS : na, "OTE 0.79s", color.new(color.red, 30), 1, plot.style_linebr)
-plot(drawLevels and usePDHL   ? pdh   : na, "PDH",   color.new(color.red, 40),    1, plot.style_linebr)
-plot(drawLevels and usePDHL   ? pdl   : na, "PDL",   color.new(color.green, 40),  1, plot.style_linebr)
-plot(drawLevels and usePDHL   ? pdc   : na, "PDC",   color.new(color.gray, 40),   1, plot.style_linebr)
-plot(drawLevels and usePWHL   ? pwh   : na, "PWH",   color.new(color.orange, 30), 1, plot.style_linebr)
-plot(drawLevels and usePWHL   ? pwl   : na, "PWL",   color.new(color.orange, 30), 1, plot.style_linebr)
-plot(drawLevels and usePiv    ? pivP  : na, "Pivot", color.new(color.blue, 20),   1, plot.style_linebr)
-plot(drawLevels and usePiv    ? pivR1 : na, "R1",    color.new(color.blue, 55),   1, plot.style_linebr)
-plot(drawLevels and usePiv    ? pivS1 : na, "S1",    color.new(color.blue, 55),   1, plot.style_linebr)
-plot(drawLevels and useVWAPlv ? vwapL : na, "VWAP",  color.new(color.purple, 0),  1, plot.style_circles)
-plot(drawLevels and useRound  ? roundL: na, "Round", color.new(color.yellow, 40), 1, plot.style_linebr)
-
-var box demBox = na
-var box supBox = na
-if showZones
-    if (strongBull and close[1] < open[1]) or bullFVG
-        if not na(demBox)
-            box.delete(demBox)
-        demBox := box.new(demBar, demTop, bar_index + 1, demBot, border_color = color.new(color.green, 40), bgcolor = color.new(color.green, 88))
-    if (strongBear and close[1] > open[1]) or bearFVG
-        if not na(supBox)
-            box.delete(supBox)
-        supBox := box.new(supBar, supTop, bar_index + 1, supBot, border_color = color.new(color.red, 40), bgcolor = color.new(color.red, 88))
-    if demOn and not na(demBox)
-        box.set_right(demBox, bar_index + 1)
-    if supOn and not na(supBox)
-        box.set_right(supBox, bar_index + 1)
+plot(drawLevels and usePoolPD ? pdh : na, "PDH", color.new(color.red, 40),    1, plot.style_linebr)
+plot(drawLevels and usePoolPD ? pdl : na, "PDL", color.new(color.green, 40),  1, plot.style_linebr)
+plot(drawLevels and usePoolPW ? pwh : na, "PWH", color.new(color.orange, 30), 1, plot.style_linebr)
+plot(drawLevels and usePoolPW ? pwl : na, "PWL", color.new(color.orange, 30), 1, plot.style_linebr)
+plot(drawLevels and usePoolAsia ? asiaH : na, "Asia H", color.new(color.aqua, 30), 1, plot.style_linebr)
+plot(drawLevels and usePoolAsia ? asiaL : na, "Asia L", color.new(color.aqua, 30), 1, plot.style_linebr)
+plot(drawLevels and usePoolSess ? lastSessHi : na, "Last H", color.new(color.gray, 20), 1, plot.style_linebr)
+plot(drawLevels and usePoolSess ? lastSessLo : na, "Last L", color.new(color.gray, 20), 1, plot.style_linebr)
 
 var box   bxSL    = na
 var box   bxTP    = na
@@ -496,8 +399,8 @@ else if inTrade and not na(bxSL)
     label.set_x(lbSL, xR)
     label.set_x(lbTP, xR)
 
-plotshape(sweepDn,  "Swept sell-side", shape.triangleup,   location.belowbar, color.new(color.teal, 0),   size = size.tiny)
-plotshape(sweepUp,  "Swept buy-side",  shape.triangledown, location.abovebar, color.new(color.maroon, 0), size = size.tiny)
+plotshape(sweepLoNow, "Swept low",  shape.triangleup,   location.belowbar, color.new(color.teal, 0),   size = size.tiny)
+plotshape(sweepHiNow, "Swept high", shape.triangledown, location.abovebar, color.new(color.maroon, 0), size = size.tiny)
 plotshape(longSig,  "BUY",  shape.labelup,   location.belowbar, color.new(color.green, 0), text = "BUY",  textcolor = color.white, size = size.small)
 plotshape(shortSig, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0),   text = "SELL", textcolor = color.white, size = size.small)
 plotshape(tpHit,    "TP",   shape.circle, location.belowbar, color.new(color.green, 0), size = size.tiny)
@@ -506,59 +409,53 @@ plotshape(exitEarly,"Exit", shape.square, location.abovebar, color.new(color.gra
 
 // ============================== DASHBOARD ====================================
 f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
-f_chk(b) => b ? "✓" : "✗"
 var table dash = table.new(f_pos(), 2, 18, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 if showDash and barstate.islast
     cW = color.white
-    ckSess  = inSessionOK
-    ckBias  = biasBull or biasBear
-    ckSwept = armBull0 or armBear0
-    ckChoch = (armBull0 and chochArmBull) or (armBear0 and chochArmBear)
-    ckZone  = tapDem or tapSup
-    ckOte   = (armBull0 and inOTE_B) or (armBear0 and inOTE_S)
-    ckMom   = momBull or momBear
-    ckFinal = (armBull0 and finalBull) or (armBear0 and finalBear)
     sessTxt = inNY ? "New York" : inLon ? "London" : inAsia ? "Asia" : "—"
-    biasTxt = biasBull ? "▲ BULL" : biasBear ? "▼ BEAR" : "—"
-    biasC   = biasBull ? color.new(color.green, 0) : biasBear ? color.new(color.red, 0) : color.new(color.gray, 0)
-    verdict = longSetup0 ? "ARM LONG" : shortSetup0 ? "ARM SHORT" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : "WAIT"
-    verdictC= longSetup0 ? color.new(color.green, 0) : shortSetup0 ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : color.new(color.gray, 30)
-    table.cell(dash, 0, 0, "APEX SESSION SMC", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
+    liveHint = (sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—"
+    expC = lastSessPhase == "Manip" ? color.new(color.green, 20) : lastSessPhase == "Accum" ? color.new(color.orange, 20) : color.new(color.gray, 30)
+    okEntry = trigBull or trigBear
+    fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) : "")
+    fStr := fStr == "" ? "soft (none)" : fStr
+    verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : "WAIT"
+    verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : color.new(color.gray, 30)
+    table.cell(dash, 0, 0, "APEX SESSION SMC (adaptive)", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
     table.merge_cells(dash, 0, 0, 1, 0)
-    table.cell(dash, 0, 1, "Preset / TF", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 1, tf + "  (bias " + biasTF + ", " + (useStoch ? "Stoch" : "CCI") + ")", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 2, "Session", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 2, sessTxt + (kzOnly ? " · KZ-only" : ""), text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 3, "① Tradeable", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 3, f_chk(ckSess), text_color = ckSess ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 4, "② Bias", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 4, biasTxt, text_color = cW, bgcolor = biasC, text_size = size.small)
-    table.cell(dash, 0, 5, "③ Swept liquidity", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 5, f_chk(ckSwept) + (armBull0 ? " sell-side" : armBear0 ? " buy-side" : ""), text_color = ckSwept ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 6, "④ CHoCH", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 6, f_chk(ckChoch), text_color = ckChoch ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 7, "⑤ OB/FVG zone", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 7, f_chk(ckZone), text_color = ckZone ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 8, "⑤ In OTE", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 8, f_chk(ckOte), text_color = ckOte ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 9, "⑥ Momentum", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 9, f_chk(ckMom), text_color = ckMom ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 10, "⑦ Candle @ level", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 10, f_chk(ckFinal) + " " + cndName + (atLevel ? " @" + lvlName : ""), text_color = ckFinal ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 11, "VERDICT", text_color = cW, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 11, verdict, text_color = cW, bgcolor = verdictC, text_size = size.small)
-    table.cell(dash, 0, 12, "Entry", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 12, inTrade ? str.tostring(entryP, "#.##") : "—", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 13, "TP / SL", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 13, inTrade ? str.tostring(tpP, "#.#") + " / " + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 14, "Risk ($) / RR", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 14, inTrade ? str.tostring(riskDist, "#.#") + " / 1:" + str.tostring(tradeRR, "#.#") : "—", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 15, "— BACKTEST (R) —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
-    table.merge_cells(dash, 0, 15, 1, 15)
-    table.cell(dash, 0, 16, "Trades / Win%", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 16, str.tostring(nT) + " / " + str.tostring(winRate, "#.#") + "%", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 17, "Avg R / PF", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 17, str.tostring(avgR, "#.##") + "R / " + str.tostring(pf, "#.##"), text_color = avgR >= 0 ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 1, "Session", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 1, sessTxt + " · " + liveHint, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 2, "Phases today", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 2, "A:" + asiaPhase + " L:" + lonPhase + " N:" + nyPhase, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 3, "Last session", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 3, lastSessName + " = " + lastSessPhase, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 4, "EXPECT next", text_color = cW, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 4, expectTxt, text_color = cW, bgcolor = expC, text_size = size.small)
+    table.cell(dash, 0, 5, "— ENTRY —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
+    table.merge_cells(dash, 0, 5, 1, 5)
+    table.cell(dash, 0, 6, "Pool swept", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 6, (sweepLoNow or sweepHiNow ? "✓ " : "✗ ") + (sweepLoNow ? swLoName : sweepHiNow ? swHiName : ""), text_color = (sweepLoNow or sweepHiNow) ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 7, "Candle", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 7, f_chk((bullConf or bearConf) and not isDoji) + " " + cndName, text_color = (bullConf or bearConf) ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 8, "Filters", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 8, fStr, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 9, "VERDICT", text_color = cW, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 9, verdict, text_color = cW, bgcolor = verdictC, text_size = size.small)
+    table.cell(dash, 0, 10, "Entry", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 10, inTrade ? str.tostring(entryP, "#.##") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 11, "TP / SL", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 11, inTrade ? str.tostring(tpP, "#.#") + " / " + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 12, "Risk / RR", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 12, inTrade ? str.tostring(riskDist, "#.#") + " / 1:" + str.tostring(tradeRR, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 13, "— SESSION ROLES (A/M/D) —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
+    table.merge_cells(dash, 0, 13, 1, 13)
+    table.cell(dash, 0, 14, "Asia", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 14, str.tostring(aA) + " / " + str.tostring(aM) + " / " + str.tostring(aD), text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 15, "London", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 15, str.tostring(lA) + " / " + str.tostring(lM) + " / " + str.tostring(lD), text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 16, "New York", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 16, str.tostring(nA) + " / " + str.tostring(nM) + " / " + str.tostring(nD), text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 17, "Trades W% / PF", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 17, str.tostring(nT) + " " + str.tostring(winRate, "#") + "% / " + str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red, text_size = size.small)
 
 // ============================== ALERTS =======================================
 if longSig

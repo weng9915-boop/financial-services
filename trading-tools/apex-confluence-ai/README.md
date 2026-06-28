@@ -1,38 +1,37 @@
 # Apex trading tools (XAUUSD) — Pine v6
 
-## ⭐⭐ Flagship: `ApexSessionSMC.pine` — Apex Session SMC
+## ⭐⭐ Flagship: `ApexSessionSMC.pine` — Apex Session SMC (adaptive phases)
 
-**One model, five timeframes.** Pick a **preset** (1m / 5m / 15m / 30m / 1h /
-Auto) and it auto-tunes the whole combo — bias timeframe, EMAs, momentum tool
-(Stochastic on low TFs, CCI on high), session gate, and hold time.
+**Phases are not hard-wired to sessions.** Asia isn't always accumulation; any
+session can accumulate, manipulate, or distribute. So the tool *detects* it
+instead of assuming it:
 
-It **enforces the smart-money sequence** — a setup only arms when *all seven* are
-true, in order:
+- **Classifies every completed session** live — **Accumulation** (ranged),
+  **Manipulation** (swept a prior pool and reversed), or **Distribution**
+  (expanded directionally).
+- **Counts which session tends to play which role** over all history — a built-in
+  "which session does what" backtest, shown as `A/M/D` tallies per session.
+- **Projects the next session:** after accumulation → expect a sweep; after a
+  manipulation → expect distribution in the reversal direction; after
+  distribution → expect a pullback.
 
-1. **Session** — in a tradeable window (kill-zones-only on low TFs).
-2. **Bias** — higher-timeframe trend agrees (HTF EMA + optional EMA stack).
-3. **Sweep** — price raided the **Asia range** liquidity and closed back (manipulation).
-4. **CHoCH** — structure broke the other way (intent revealed).
-5. **Zone + OTE** — price retraced **into an Order Block / FVG** sitting in the
-   **0.62–0.79 fib** (a discount for longs, a premium for shorts).
-6. **Momentum** — Stochastic / CCI turns at the zone.
-7. **Candle @ key level** *(the quality gate)* — the entry bar must be a real
-   **reaction candlestick** (engulfing / pin-rejection / strong-body, never a doji)
-   **at a key level** — prev day/week H-L-C, daily pivot, session VWAP, or a round
-   number. This is the final, most universal filter; it's what separates an A+
-   entry from a mid-air one.
+**Entry — loose enough to actually fire:** a **liquidity pool** (last session H/L,
+prev day/week H/L, today's Asia H/L) is **swept and reclaimed** — the manipulation
+happening in real time — and a **confirming candlestick** (engulfing / pin /
+strong-body, never a doji) is the **trigger**. HTF bias, momentum, and CHoCH are
+**optional filters, off by default** — add them to tighten. Direction = the
+reversal of the sweep (you fade the raid and ride the distribution).
 
-→ **Execution:** LOCKED entry / SL (beyond the sweep) / TP (fixed RR *or* the
-opposite Asia-range liquidity). **One quality trade per raid**, time + structure
-stop, cooldown. The AND-chain makes setups **rare by design — quality over quantity.**
+→ **Execution:** LOCKED entry / SL (beyond the swept wick, or fixed-$) / TP (fixed
+RR *or* the opposite pool). Cooldown, opposite-sweep cut, and a time stop.
 
-The dashboard is a **live ①–⑥ checklist** (✓/✗ for each step) ending in a
-`ARM LONG / ARM SHORT / WAIT` verdict, plus the locked levels and an R-based
-self-backtest. Asia range, OB/FVG zones, and the OTE band are drawn on the chart.
+The dashboard shows the **current session + live phase**, **today's A/L/N phases**,
+the **next-session expectation**, the entry checklist (pool swept ✓ / candle ✓ /
+filters), locked levels, the **session-role tallies**, and an R-based self-backtest.
 Non-repaint on bar close; phone alerts via `alert()`.
 
-> Sessions are in **UTC** by default — adjust the three session inputs to your
-> feed's clock. The whole method lives or dies on the Asia high/low being right.
+> Sessions are in **UTC** by default — adjust the three session windows to your
+> feed's clock so the phase detection lines up with the real sessions.
 
 ---
 
