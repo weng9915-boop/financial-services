@@ -64,11 +64,25 @@ useFailExit  = input.bool(true, "Cut if structure flips (opposite CHoCH)", group
 useTimeStop  = input.bool(true, "Time stop (preset-tuned)", group = gR)
 maxBarsOv    = input.int(0, "  Time-stop override (0 = preset)", minval = 0, group = gR)
 
-// ============================== ⑥ DISPLAY ====================================
-gD = "⑥ Display"
+// ============================== ⑦ FINAL CONFIRMATION =========================
+gC = "⑦ Final confirmation — candles + key levels"
+useCandle = input.bool(true, "Require a confirming candlestick", group = gC, tooltip = "THE key execution filter. The entry bar must be a real reaction candle — engulfing, pin/rejection, or strong-body — not a doji or a limp push. A signal without a good candle is skipped.")
+wickMult  = input.float(2.0, "  Pin/rejection wick ≥ body ×", minval = 0.5, step = 0.1, group = gC)
+useLevel  = input.bool(true, "Require a key level at the entry", group = gC, tooltip = "Entry must be within tolerance of a key level (prev day/week H/L/close, daily pivot, session VWAP, round number). Turns a good setup into an A+. Widen the tolerance or turn this off if too strict.")
+levelTolA = input.float(0.5, "  Level tolerance × ATR", minval = 0.05, step = 0.05, group = gC)
+usePDHL   = input.bool(true, "  Prev day H / L / Close", group = gC)
+usePWHL   = input.bool(true, "  Prev week H / L", group = gC)
+usePiv    = input.bool(true, "  Daily pivots (P / R1 / S1)", group = gC)
+useVWAPlv = input.bool(true, "  Session VWAP", group = gC)
+useRound  = input.bool(true, "  Round numbers", group = gC)
+roundStep = input.float(50.0, "    Round step ($)", minval = 1, group = gC)
+
+// ============================== ⑧ DISPLAY ====================================
+gD = "⑧ Display"
 showDash = input.bool(true, "Show dashboard / checklist", group = gD)
 dashPos  = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
 showZones= input.bool(true, "Draw OB/FVG zones", group = gD)
+drawLevels = input.bool(true, "Draw key levels", group = gD)
 drawAsia = input.bool(true, "Draw Asia range", group = gD)
 drawOTE  = input.bool(true, "Draw OTE band of the armed leg", group = gD)
 
@@ -238,6 +252,79 @@ cciBear = ta.crossunder(cci, 100) or ta.crossunder(cci, 0)
 momBull = useStoch ? stochBull : cciBull
 momBear = useStoch ? stochBear : cciBear
 
+// ----- ⑦ key levels (prev session / day / week) ------------------------------
+pdh = request.security(syminfo.tickerid, "D", high[1],  lookahead = barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],   lookahead = barmerge.lookahead_on)
+pdc = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+pwh = request.security(syminfo.tickerid, "W", high[1],  lookahead = barmerge.lookahead_on)
+pwl = request.security(syminfo.tickerid, "W", low[1],   lookahead = barmerge.lookahead_on)
+pivP  = (pdh + pdl + pdc) / 3
+pivR1 = 2 * pivP - pdl
+pivS1 = 2 * pivP - pdh
+vwapL = ta.vwap
+roundL = math.round(close / roundStep) * roundStep
+
+f_near(float price, float tol) =>
+    float best = 1e9
+    string nm = "—"
+    if usePDHL
+        if math.abs(price - pdh) < best
+            best := math.abs(price - pdh)
+            nm := "PDH"
+        if math.abs(price - pdl) < best
+            best := math.abs(price - pdl)
+            nm := "PDL"
+        if math.abs(price - pdc) < best
+            best := math.abs(price - pdc)
+            nm := "PDC"
+    if usePWHL
+        if math.abs(price - pwh) < best
+            best := math.abs(price - pwh)
+            nm := "PWH"
+        if math.abs(price - pwl) < best
+            best := math.abs(price - pwl)
+            nm := "PWL"
+    if usePiv
+        if math.abs(price - pivP) < best
+            best := math.abs(price - pivP)
+            nm := "Pivot"
+        if math.abs(price - pivR1) < best
+            best := math.abs(price - pivR1)
+            nm := "R1"
+        if math.abs(price - pivS1) < best
+            best := math.abs(price - pivS1)
+            nm := "S1"
+    if useVWAPlv and not na(vwapL)
+        if math.abs(price - vwapL) < best
+            best := math.abs(price - vwapL)
+            nm := "VWAP"
+    if useRound
+        if math.abs(price - roundL) < best
+            best := math.abs(price - roundL)
+            nm := "Round"
+    [best <= tol, nm, best]
+
+[atLevel, lvlName, lvlDist] = f_near(close, levelTolA * atr)
+
+// ----- ⑦ candlestick confirmation --------------------------------------------
+bodyC = math.abs(close - open)
+rngC  = high - low
+upWk  = high - math.max(close, open)
+dnWk  = math.min(close, open) - low
+isDoji  = rngC > 0 and bodyC <= 0.1 * rngC
+bullEng = close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
+bearEng = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
+bullPin = rngC > 0 and dnWk >= wickMult * bodyC and (high - close) <= 0.45 * rngC
+bearPin = rngC > 0 and upWk >= wickMult * bodyC and (close - low) <= 0.45 * rngC
+bullMar = close > open and bodyC >= dispMult * atr
+bearMar = open > close and bodyC >= dispMult * atr
+bullConf = (bullEng or bullPin or bullMar) and not isDoji
+bearConf = (bearEng or bearPin or bearMar) and not isDoji
+cndName = isDoji ? "doji" : (bullEng or bearEng) ? "engulf" : (bullPin or bearPin) ? "pin" : (bullMar or bearMar) ? "strong" : "—"
+
+finalBull = (not useCandle or bullConf) and (not useLevel or atLevel)
+finalBear = (not useCandle or bearConf) and (not useLevel or atLevel)
+
 // ============================== STATE MACHINE ================================
 var bool  inTrade  = false
 var int   dir      = 0
@@ -263,8 +350,8 @@ tpHit     = false
 slHit     = false
 exitEarly = false
 
-longSetup0  = inSessionOK and biasBull and armBull0 and chochArmBull and tapDem and inOTE_B and momBull
-shortSetup0 = inSessionOK and biasBear and armBear0 and chochArmBear and tapSup and inOTE_S and momBear
+longSetup0  = inSessionOK and biasBull and armBull0 and chochArmBull and tapDem and inOTE_B and momBull and finalBull
+shortSetup0 = inSessionOK and biasBear and armBear0 and chochArmBear and tapSup and inOTE_S and momBear and finalBear
 
 if barstate.isconfirmed
     if inTrade
@@ -348,6 +435,16 @@ plot(drawOTE and armBull0 and rangeB > 0 ? oteHiB : na, "OTE 0.62", color.new(co
 plot(drawOTE and armBull0 and rangeB > 0 ? oteLoB : na, "OTE 0.79", color.new(color.green, 30), 1, plot.style_linebr)
 plot(drawOTE and armBear0 and rangeS > 0 ? oteLoS : na, "OTE 0.62s", color.new(color.red, 30), 1, plot.style_linebr)
 plot(drawOTE and armBear0 and rangeS > 0 ? oteHiS : na, "OTE 0.79s", color.new(color.red, 30), 1, plot.style_linebr)
+plot(drawLevels and usePDHL   ? pdh   : na, "PDH",   color.new(color.red, 40),    1, plot.style_linebr)
+plot(drawLevels and usePDHL   ? pdl   : na, "PDL",   color.new(color.green, 40),  1, plot.style_linebr)
+plot(drawLevels and usePDHL   ? pdc   : na, "PDC",   color.new(color.gray, 40),   1, plot.style_linebr)
+plot(drawLevels and usePWHL   ? pwh   : na, "PWH",   color.new(color.orange, 30), 1, plot.style_linebr)
+plot(drawLevels and usePWHL   ? pwl   : na, "PWL",   color.new(color.orange, 30), 1, plot.style_linebr)
+plot(drawLevels and usePiv    ? pivP  : na, "Pivot", color.new(color.blue, 20),   1, plot.style_linebr)
+plot(drawLevels and usePiv    ? pivR1 : na, "R1",    color.new(color.blue, 55),   1, plot.style_linebr)
+plot(drawLevels and usePiv    ? pivS1 : na, "S1",    color.new(color.blue, 55),   1, plot.style_linebr)
+plot(drawLevels and useVWAPlv ? vwapL : na, "VWAP",  color.new(color.purple, 0),  1, plot.style_circles)
+plot(drawLevels and useRound  ? roundL: na, "Round", color.new(color.yellow, 40), 1, plot.style_linebr)
 
 var box demBox = na
 var box supBox = na
@@ -410,7 +507,7 @@ plotshape(exitEarly,"Exit", shape.square, location.abovebar, color.new(color.gra
 // ============================== DASHBOARD ====================================
 f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
 f_chk(b) => b ? "✓" : "✗"
-var table dash = table.new(f_pos(), 2, 17, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+var table dash = table.new(f_pos(), 2, 18, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 if showDash and barstate.islast
     cW = color.white
     ckSess  = inSessionOK
@@ -420,6 +517,7 @@ if showDash and barstate.islast
     ckZone  = tapDem or tapSup
     ckOte   = (armBull0 and inOTE_B) or (armBear0 and inOTE_S)
     ckMom   = momBull or momBear
+    ckFinal = (armBull0 and finalBull) or (armBear0 and finalBear)
     sessTxt = inNY ? "New York" : inLon ? "London" : inAsia ? "Asia" : "—"
     biasTxt = biasBull ? "▲ BULL" : biasBear ? "▼ BEAR" : "—"
     biasC   = biasBull ? color.new(color.green, 0) : biasBear ? color.new(color.red, 0) : color.new(color.gray, 0)
@@ -445,20 +543,22 @@ if showDash and barstate.islast
     table.cell(dash, 1, 8, f_chk(ckOte), text_color = ckOte ? color.green : color.red, text_size = size.small)
     table.cell(dash, 0, 9, "⑥ Momentum", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 9, f_chk(ckMom), text_color = ckMom ? color.green : color.red, text_size = size.small)
-    table.cell(dash, 0, 10, "VERDICT", text_color = cW, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 10, verdict, text_color = cW, bgcolor = verdictC, text_size = size.small)
-    table.cell(dash, 0, 11, "Entry", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 11, inTrade ? str.tostring(entryP, "#.##") : "—", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 12, "TP / SL", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 12, inTrade ? str.tostring(tpP, "#.#") + " / " + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 13, "Risk ($) / RR", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 13, inTrade ? str.tostring(riskDist, "#.#") + " / 1:" + str.tostring(tradeRR, "#.#") : "—", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 14, "— BACKTEST (R) —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
-    table.merge_cells(dash, 0, 14, 1, 14)
-    table.cell(dash, 0, 15, "Trades / Win%", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 15, str.tostring(nT) + " / " + str.tostring(winRate, "#.#") + "%", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 16, "Avg R / PF", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 16, str.tostring(avgR, "#.##") + "R / " + str.tostring(pf, "#.##"), text_color = avgR >= 0 ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 10, "⑦ Candle @ level", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 10, f_chk(ckFinal) + " " + cndName + (atLevel ? " @" + lvlName : ""), text_color = ckFinal ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 11, "VERDICT", text_color = cW, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 11, verdict, text_color = cW, bgcolor = verdictC, text_size = size.small)
+    table.cell(dash, 0, 12, "Entry", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 12, inTrade ? str.tostring(entryP, "#.##") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 13, "TP / SL", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 13, inTrade ? str.tostring(tpP, "#.#") + " / " + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 14, "Risk ($) / RR", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 14, inTrade ? str.tostring(riskDist, "#.#") + " / 1:" + str.tostring(tradeRR, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 15, "— BACKTEST (R) —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
+    table.merge_cells(dash, 0, 15, 1, 15)
+    table.cell(dash, 0, 16, "Trades / Win%", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 16, str.tostring(nT) + " / " + str.tostring(winRate, "#.#") + "%", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 17, "Avg R / PF", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 17, str.tostring(avgR, "#.##") + "R / " + str.tostring(pf, "#.##"), text_color = avgR >= 0 ? color.green : color.red, text_size = size.small)
 
 // ============================== ALERTS =======================================
 if longSig

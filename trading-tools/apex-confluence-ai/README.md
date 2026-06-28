@@ -6,7 +6,7 @@
 Auto) and it auto-tunes the whole combo — bias timeframe, EMAs, momentum tool
 (Stochastic on low TFs, CCI on high), session gate, and hold time.
 
-It **enforces the smart-money sequence** — a setup only arms when *all six* are
+It **enforces the smart-money sequence** — a setup only arms when *all seven* are
 true, in order:
 
 1. **Session** — in a tradeable window (kill-zones-only on low TFs).
@@ -16,6 +16,11 @@ true, in order:
 5. **Zone + OTE** — price retraced **into an Order Block / FVG** sitting in the
    **0.62–0.79 fib** (a discount for longs, a premium for shorts).
 6. **Momentum** — Stochastic / CCI turns at the zone.
+7. **Candle @ key level** *(the quality gate)* — the entry bar must be a real
+   **reaction candlestick** (engulfing / pin-rejection / strong-body, never a doji)
+   **at a key level** — prev day/week H-L-C, daily pivot, session VWAP, or a round
+   number. This is the final, most universal filter; it's what separates an A+
+   entry from a mid-air one.
 
 → **Execution:** LOCKED entry / SL (beyond the sweep) / TP (fixed RR *or* the
 opposite Asia-range liquidity). **One quality trade per raid**, time + structure
