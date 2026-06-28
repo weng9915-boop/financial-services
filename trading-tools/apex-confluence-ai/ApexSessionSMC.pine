@@ -24,8 +24,8 @@ indicator("Apex Session SMC [XAUUSD]", "ApexSMC", overlay = true,
      max_boxes_count = 60, max_lines_count = 80, max_labels_count = 200)
 
 // ============================== HELPERS ======================================
-f_swLo(float p) => not na(p) and low  < p and close > p   // swept a low pool and reclaimed
-f_swHi(float p) => not na(p) and high > p and close < p   // swept a high pool and reclaimed
+f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
+f_swHi(float p) => not na(p) and close[1] <= p and high > p and close < p   // was below, raided above, reclaimed
 f_phase(float o, float h, float l, float c, float pHi, float pLo, float refR) =>
     float rng = h - l
     bool swHi = not na(pHi) and h > pHi and c < pHi
@@ -184,7 +184,9 @@ var float lastSessLo = na
 var string lastSessName = "—"
 var string lastSessPhase = "—"
 var int lastSessDir = 0
-var float refRng = na
+var float refAsia = na
+var float refLon  = na
+var float refNY   = na
 var string asiaPhase = "—"
 var string lonPhase  = "—"
 var string nyPhase   = "—"
@@ -208,7 +210,7 @@ endLon  = not inLon  and inLon[1]
 endNY   = not inNY   and inNY[1]
 
 if endAsia
-    [phA, drA] = f_phase(asiaO, asiaH, asiaL, asiaC, lastSessHi, lastSessLo, refRng)
+    [phA, drA] = f_phase(asiaO, asiaH, asiaL, asiaC, lastSessHi, lastSessLo, refAsia)
     asiaPhase := phA
     aA := aA + (phA == "Accum" ? 1 : 0)
     aM := aM + (phA == "Manip" ? 1 : 0)
@@ -218,9 +220,9 @@ if endAsia
     lastSessName := "Asia"
     lastSessPhase := phA
     lastSessDir := drA
-    refRng := na(refRng) ? asiaH - asiaL : refRng * 0.8 + (asiaH - asiaL) * 0.2
+    refAsia := na(refAsia) ? asiaH - asiaL : refAsia * 0.8 + (asiaH - asiaL) * 0.2
 if endLon
-    [phL, drL] = f_phase(lonO, lonH, lonL, lonC, lastSessHi, lastSessLo, refRng)
+    [phL, drL] = f_phase(lonO, lonH, lonL, lonC, lastSessHi, lastSessLo, refLon)
     lonPhase := phL
     lA := lA + (phL == "Accum" ? 1 : 0)
     lM := lM + (phL == "Manip" ? 1 : 0)
@@ -230,9 +232,9 @@ if endLon
     lastSessName := "London"
     lastSessPhase := phL
     lastSessDir := drL
-    refRng := na(refRng) ? lonH - lonL : refRng * 0.8 + (lonH - lonL) * 0.2
+    refLon := na(refLon) ? lonH - lonL : refLon * 0.8 + (lonH - lonL) * 0.2
 if endNY
-    [phN, drN] = f_phase(nyO, nyH, nyL, nyC, lastSessHi, lastSessLo, refRng)
+    [phN, drN] = f_phase(nyO, nyH, nyL, nyC, lastSessHi, lastSessLo, refNY)
     nyPhase := phN
     nA := nA + (phN == "Accum" ? 1 : 0)
     nM := nM + (phN == "Manip" ? 1 : 0)
@@ -242,7 +244,7 @@ if endNY
     lastSessName := "NewYork"
     lastSessPhase := phN
     lastSessDir := drN
-    refRng := na(refRng) ? nyH - nyL : refRng * 0.8 + (nyH - nyL) * 0.2
+    refNY := na(refNY) ? nyH - nyL : refNY * 0.8 + (nyH - nyL) * 0.2
 
 expectTxt = lastSessPhase == "Accum" ? "SWEEP likely (manip)" : lastSessPhase == "Manip" ? "DISTRIB " + (lastSessDir == 1 ? "▲ up" : "▼ down") : lastSessPhase == "Distrib" ? "pullback / accum" : "—"
 
