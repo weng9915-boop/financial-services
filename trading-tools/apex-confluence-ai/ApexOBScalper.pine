@@ -1,59 +1,56 @@
 //@version=6
 // =============================================================================
-//  APEX OB SCALPER  —  1-minute XAUUSD  (order-block reaction, big R:R)
+//  APEX OB SCALPER  —  1-minute XAUUSD  (order-block / FVG reaction, fixed-risk 1:5)
 // -----------------------------------------------------------------------------
-//  A DEDICATED 1m engine (separate from the trend-pullback indicator, which is a
-//  15m/1h tool). Built for gold's fast intraday impulses:
+//  DIRECTION → SUPPORT → CONFIRMATION → EXECUTION, one clean trade at a time.
 //
-//   ANALYSIS     → HTF (15m) trend + EMA + VWAP all agree on direction.
-//   THE ZONE     → ORDER BLOCK: the last opposite candle before a strong
-//                  ATR-displacement impulse (where institutions filled). Drawn
-//                  as a demand (green) / supply (red) box.
-//   CONFIRMATION → price retraces INTO the zone and prints a high-volume
-//                  ENGULFING rejection candle. Not a guess — a confirmed turn.
-//   EXECUTION    → enter near the zone extreme (tiny risk), stop just BEYOND the
-//                  zone (beyond the liquidity), partial-profit model to a big R:R.
+//   DIRECTION    : HTF (15m) trend + EMA + VWAP must agree.
+//   SUPPORT      : an ORDER BLOCK (last opposite candle before an ATR impulse)
+//                  or a FAIR-VALUE GAP (3-candle imbalance) — drawn as a zone.
+//   CONFIRMATION : price taps the zone and prints a high-volume ENGULFING candle.
+//   EXECUTION    : FIXED-dollar stop (e.g. $10) and ONE target at 1:5. A cooldown
+//                  spaces trades out so the same level isn't hammered 3x in 10 min.
 //
-//  RISK MODEL: 1/3 booked at 1R, 1/3 at 3R, 1/3 at 5R; stop → break-even after
-//  TP1. A 1:5-style payoff: win-rate is naturally lower, profit comes from the
-//  runners — the partials + filters are tuned to lift the hit-rate.
+//   ADAPTIVE (optional): on a losing streak it pulls the target CLOSER to bank a
+//   win and reset; back to full 1:5 after a win.
 //
-//  Non-repaint: signals commit on bar close. Tick volume on most gold feeds.
-//  Not financial advice. Backtest/forward-test before risking money.
+//  Non-repaint: commits on bar close. Tick volume on most gold feeds. Big-R:R =
+//  lower win-rate by design; profit comes from the runners. Not financial advice.
 // =============================================================================
 
 indicator("Apex OB Scalper [1m XAUUSD]", "ApexOB", overlay = true,
-     max_boxes_count = 60, max_lines_count = 100, max_labels_count = 200)
+     max_boxes_count = 80, max_lines_count = 100, max_labels_count = 200)
 
 // ============================== INPUTS =======================================
-gH = "① Bias & filters"
+gH = "① Direction"
 htfRes   = input.timeframe("15", "HTF bias timeframe", group = gH)
 useHTF   = input.bool(true, "Require HTF trend agreement", group = gH)
 emaLen   = input.int(50, "EMA trend filter", minval = 1, group = gH)
 useEma   = input.bool(true, "Require price on EMA side", group = gH)
 useVwap  = input.bool(true, "Require price on VWAP side", group = gH)
 
-gOB = "② Order blocks"
-atrLen   = input.int(14, "ATR length", minval = 1, group = gOB)
-dispMult = input.float(1.0, "Impulse body ≥ ATR ×", minval = 0.1, step = 0.1, group = gOB, tooltip = "How strong the displacement candle must be to mark the prior candle as an order block.")
-obMaxAge = input.int(60, "Zone max age (bars)", minval = 5, group = gOB)
-useEngulf= input.bool(true, "Require engulfing confirmation", group = gOB)
-useVol   = input.bool(true, "Require high-volume confirmation", group = gOB)
-volMult  = input.float(1.3, "  Volume ≥ avg ×", minval = 0.1, step = 0.1, group = gOB)
-volLen   = input.int(20, "  Volume avg length", minval = 1, group = gOB)
+gZ = "② Support zones (OB / FVG)"
+atrLen   = input.int(14, "ATR length", minval = 1, group = gZ)
+dispMult = input.float(1.0, "Order-block impulse ≥ ATR ×", minval = 0.1, step = 0.1, group = gZ)
+useFVG   = input.bool(true, "Also use Fair-Value-Gap zones", group = gZ)
+obMaxAge = input.int(60, "Zone max age (bars)", minval = 5, group = gZ)
+useEngulf= input.bool(true, "Require engulfing confirmation", group = gZ)
+useVol   = input.bool(true, "Require high-volume confirmation", group = gZ)
+volMult  = input.float(1.3, "  Volume ≥ avg ×", minval = 0.1, step = 0.1, group = gZ)
+volLen   = input.int(20, "  Volume avg length", minval = 1, group = gZ)
 
-gR = "③ Risk & targets (partial model)"
-slBufAtr = input.float(0.3, "SL beyond zone (× ATR)", minval = 0.0, step = 0.1, group = gR)
-tp1R     = input.float(1.0, "TP1 (× risk) — book 1/3", minval = 0.1, step = 0.1, group = gR)
-tp2R     = input.float(3.0, "TP2 (× risk) — book 1/3", minval = 0.1, step = 0.1, group = gR)
-tp3R     = input.float(5.0, "TP3 (× risk) — runner 1/3", minval = 0.1, step = 0.1, group = gR)
-beAfterTP1 = input.bool(true, "Move stop to break-even after TP1", group = gR)
-costR    = input.float(0.0, "Cost per trade (R)", minval = 0.0, step = 0.05, group = gR, tooltip = "Spread+commission as a fraction of risk, subtracted from each trade's result.")
+gR = "③ Execution — fixed risk, 1 TP"
+slDist   = input.float(10.0, "Stop distance ($ / price units)", minval = 0.1, step = 0.5, group = gR, tooltip = "Fixed dollar risk. e.g. 10 → entry 4220, SL 4210.")
+rr       = input.float(5.0, "Reward : Risk (1 : X)", minval = 0.5, step = 0.5, group = gR, tooltip = "TP = stop distance × this. 5 → $50 target on a $10 stop.")
+cooldownBars = input.int(15, "Cooldown after a trade (bars)", minval = 0, group = gR, tooltip = "Bars to wait before the next entry — stops the same level firing 3x in 10 min.")
+useAdaptive  = input.bool(false, "Adaptive: closer TP on a losing streak", group = gR, tooltip = "When recent trades keep failing, pull the target closer (down to the floor) to bank a win and reset. Back to full 1:5 after a win.")
+adaptRRmin   = input.float(2.0, "  Adaptive RR floor", minval = 0.5, step = 0.5, group = gR)
+adaptStep    = input.float(0.5, "  Tighten per consecutive loss", minval = 0.1, step = 0.1, group = gR)
 
 gD = "④ Display"
 showDash = input.bool(true, "Show dashboard", group = gD)
 dashPos  = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
-showZones= input.bool(true, "Draw order-block zones", group = gD)
+showZones= input.bool(true, "Draw support zones", group = gD)
 
 // ============================== CALCULATIONS =================================
 atr  = ta.atr(atrLen)
@@ -66,10 +63,7 @@ htfEma   = request.security(syminfo.tickerid, htfRes, ta.ema(close, emaLen)[bars
 htfBull  = htfClose > htfEma
 htfBear  = htfClose < htfEma
 
-// ----- Order-block detection: last opposite candle before an ATR impulse -----
-strongBull = close > open and (close - open) > dispMult * atr
-strongBear = open > close and (open - close) > dispMult * atr
-
+// ----- the active demand / supply zone (fed by order blocks AND FVGs) --------
 var float demTop = na
 var float demBot = na
 var bool  demOn  = false
@@ -79,6 +73,9 @@ var float supBot = na
 var bool  supOn  = false
 var int   supBar = na
 
+// Order block: last opposite candle before a strong ATR-displacement impulse
+strongBull = close > open and (close - open) > dispMult * atr
+strongBear = open > close and (open - close) > dispMult * atr
 if strongBull and close[1] < open[1]
     demTop := high[1]
     demBot := low[1]
@@ -89,6 +86,20 @@ if strongBear and close[1] > open[1]
     supBot := low[1]
     supOn  := true
     supBar := bar_index - 1
+
+// Fair-Value Gap: 3-candle imbalance (gap that price tends to return to)
+bullFVG = useFVG and low > high[2]
+bearFVG = useFVG and high < low[2]
+if bullFVG
+    demTop := low
+    demBot := high[2]
+    demOn  := true
+    demBar := bar_index
+if bearFVG
+    supTop := low[2]
+    supBot := high
+    supOn  := true
+    supBar := bar_index
 
 // invalidate zones: closed through them, or too old
 if demOn and (close < demBot or bar_index - demBar > obMaxAge)
@@ -106,88 +117,62 @@ htfOkS  = not useHTF  or htfBear
 volOk   = not useVol  or volume >= volMult * volAvg
 bullEngulf = close > open and (not useEngulf or close >= high[1])
 bearEngulf = close < open and (not useEngulf or close <= low[1])
+tapDem = demOn and low <= demTop and close > demBot
+tapSup = supOn and high >= supBot and close < supTop
 
-tapDem = demOn and low <= demTop and close > demBot          // dipped into demand, held
-tapSup = supOn and high >= supBot and close < supTop         // poked into supply, held
-
-// ============================== STATE MACHINE (partial model) ================
+// ============================== STATE MACHINE ================================
 var bool  inTrade = false
 var int   dir     = 0
 var float entryP  = na
 var float slP     = na
-var float riskP   = na
-var float t1 = na
-var float t2 = na
-var float t3 = na
-var int   filled  = 0
-var float bookedR = 0.0
+var float tpP     = na
+var float tradeRR = na
+var int   lossStreak = 0
+var int   lastExitBar = na
 var int   nT = 0
 var int   nW = 0
 var float sumR = 0.0
 var float grW = 0.0
 var float grL = 0.0
 
+effRR = useAdaptive ? math.max(adaptRRmin, rr - lossStreak * adaptStep) : rr
+cooled = na(lastExitBar) or bar_index - lastExitBar >= cooldownBars
+
 longSig  = false
 shortSig = false
-tp1Sig   = false
-tp2Sig   = false
-tp3Sig   = false
-slSig    = false
+tpHit    = false
+slHit    = false
 
-longTrig  = not inTrade and tapDem and bullEngulf and volOk and htfOkL and emaOkL and vwapOkL
-shortTrig = not inTrade and tapSup and bearEngulf and volOk and htfOkS and emaOkS and vwapOkS
+longTrig  = not inTrade and cooled and tapDem and bullEngulf and volOk and htfOkL and emaOkL and vwapOkL
+shortTrig = not inTrade and cooled and tapSup and bearEngulf and volOk and htfOkS and emaOkS and vwapOkS
 
 if barstate.isconfirmed
-    // ----- manage an open trade (stop first = conservative) -----------------
     if inTrade
-        bool stopHit = dir == 1 ? low <= slP : high >= slP
-        if stopHit
-            float remFrac = (3 - filled) / 3.0
-            float stopRm  = dir * (slP - entryP) / riskP
-            bookedR := bookedR + remFrac * stopRm
-            float net = bookedR - costR
+        bool hitS = dir == 1 ? low  <= slP : high >= slP
+        bool hitT = dir == 1 ? high >= tpP : low  <= tpP
+        float r = na
+        if hitS
+            r := -1.0
+            slHit := true
+        else if hitT
+            r := tradeRR
+            tpHit := true
+        if not na(r)
             nT := nT + 1
-            nW := nW + (net > 0 ? 1 : 0)
-            sumR := sumR + net
-            grW := grW + (net > 0 ? net : 0.0)
-            grL := grL + (net < 0 ? -net : 0.0)
-            slSig := filled == 0
+            nW := nW + (r > 0 ? 1 : 0)
+            sumR := sumR + r
+            grW := grW + (r > 0 ? r : 0.0)
+            grL := grL + (r < 0 ? -r : 0.0)
+            lossStreak := r > 0 ? 0 : lossStreak + 1
+            lastExitBar := bar_index
             inTrade := false
             dir := 0
-        else
-            if filled < 1 and (dir == 1 ? high >= t1 : low <= t1)
-                bookedR := bookedR + (1.0 / 3) * tp1R
-                filled := 1
-                tp1Sig := true
-                if beAfterTP1
-                    slP := entryP
-            if filled < 2 and (dir == 1 ? high >= t2 : low <= t2)
-                bookedR := bookedR + (1.0 / 3) * tp2R
-                filled := 2
-                tp2Sig := true
-            if filled < 3 and (dir == 1 ? high >= t3 : low <= t3)
-                bookedR := bookedR + (1.0 / 3) * tp3R
-                filled := 3
-                tp3Sig := true
-                float net = bookedR - costR
-                nT := nT + 1
-                nW := nW + (net > 0 ? 1 : 0)
-                sumR := sumR + net
-                grW := grW + (net > 0 ? net : 0.0)
-                grL := grL + (net < 0 ? -net : 0.0)
-                inTrade := false
-                dir := 0
-    // ----- new entry --------------------------------------------------------
     if not inTrade and (longTrig or shortTrig)
         dir := longTrig ? 1 : -1
         entryP := close
-        slP := longTrig ? demBot - atr * slBufAtr : supTop + atr * slBufAtr
-        riskP := math.abs(entryP - slP)
-        t1 := entryP + dir * tp1R * riskP
-        t2 := entryP + dir * tp2R * riskP
-        t3 := entryP + dir * tp3R * riskP
-        filled := 0
-        bookedR := 0.0
+        slP := entryP - dir * slDist
+        tradeRR := effRR
+        tpP := entryP + dir * tradeRR * slDist
         inTrade := true
         longSig := longTrig
         shortSig := shortTrig
@@ -201,38 +186,65 @@ winRate = nT > 0 ? nW / nT * 100 : 0.0
 avgR    = nT > 0 ? sumR / nT : 0.0
 pf      = grL > 0 ? grW / grL : (grW > 0 ? 999.0 : 0.0)
 
-// ============================== ZONES (boxes) ================================
+// ============================== ZONE BOXES ===================================
 var box demBox = na
 var box supBox = na
 if showZones
-    if strongBull and close[1] < open[1]
+    if (strongBull and close[1] < open[1]) or bullFVG
         if not na(demBox)
             box.delete(demBox)
-        demBox := box.new(bar_index - 1, high[1], bar_index + 1, low[1], border_color = color.new(color.green, 40), bgcolor = color.new(color.green, 88))
-    if strongBear and close[1] > open[1]
+        demBox := box.new(demBar, demTop, bar_index + 1, demBot, border_color = color.new(color.green, 40), bgcolor = color.new(color.green, 88))
+    if (strongBear and close[1] > open[1]) or bearFVG
         if not na(supBox)
             box.delete(supBox)
-        supBox := box.new(bar_index - 1, high[1], bar_index + 1, low[1], border_color = color.new(color.red, 40), bgcolor = color.new(color.red, 88))
+        supBox := box.new(supBar, supTop, bar_index + 1, supBot, border_color = color.new(color.red, 40), bgcolor = color.new(color.red, 88))
     if demOn and not na(demBox)
         box.set_right(demBox, bar_index + 1)
     if supOn and not na(supBox)
         box.set_right(supBox, bar_index + 1)
 
+// ============================== TRADE LEVELS (boxes + labels) ================
+var box   bxSL   = na
+var box   bxTP   = na
+var line  lnEnt  = na
+var label lbBadge= na
+var label lbSL   = na
+var label lbTP   = na
+if longSig or shortSig
+    if not na(bxSL)
+        box.delete(bxSL)
+    if not na(bxTP)
+        box.delete(bxTP)
+    if not na(lnEnt)
+        line.delete(lnEnt)
+    if not na(lbBadge)
+        label.delete(lbBadge)
+    if not na(lbSL)
+        label.delete(lbSL)
+    if not na(lbTP)
+        label.delete(lbTP)
+    int xR = bar_index + 5
+    bxSL := box.new(bar_index, math.max(entryP, slP), xR, math.min(entryP, slP), border_color = color.new(color.red, 50), bgcolor = color.new(color.red, 85))
+    bxTP := box.new(bar_index, math.max(entryP, tpP), xR, math.min(entryP, tpP), border_color = color.new(color.green, 50), bgcolor = color.new(color.green, 85))
+    lnEnt := line.new(bar_index, entryP, xR, entryP, color = color.new(color.blue, 0), width = 2, style = line.style_dashed)
+    lbBadge := label.new(bar_index, entryP, (dir == 1 ? "BUY 1:" : "SELL 1:") + str.tostring(tradeRR, "#.#"), style = dir == 1 ? label.style_label_up : label.style_label_down, color = dir == 1 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor = color.white, size = size.small)
+    lbSL := label.new(xR, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.red, 10),   textcolor = color.white, size = size.small)
+    lbTP := label.new(xR, tpP, "TP " + str.tostring(tpP, "#.##"), style = label.style_label_left, color = color.new(color.green, 10), textcolor = color.white, size = size.small)
+else if inTrade and not na(bxSL)
+    int xR = bar_index + 5
+    box.set_right(bxSL, xR)
+    box.set_right(bxTP, xR)
+    line.set_x2(lnEnt, xR)
+    label.set_x(lbSL, xR)
+    label.set_x(lbTP, xR)
+
 // ============================== PLOTS ========================================
 plot(ema,  "EMA",  color.new(color.orange, 0), 1)
 plot(vwap, "VWAP", color.new(color.purple, 0), 1, plot.style_circles)
-plot(inTrade ? entryP : na, "Entry",  color.new(color.blue, 0), 1, plot.style_linebr)
-plot(inTrade ? slP : na,    "Stop",   color.new(color.red, 0),  1, plot.style_linebr)
-plot(inTrade and filled < 1 ? t1 : na, "TP1", color.new(color.green, 30), 1, plot.style_linebr)
-plot(inTrade and filled < 2 ? t2 : na, "TP2", color.new(color.green, 15), 1, plot.style_linebr)
-plot(inTrade and filled < 3 ? t3 : na, "TP3", color.new(color.green, 0),  1, plot.style_linebr)
-
 plotshape(longSig,  "BUY",  shape.labelup,   location.belowbar, color.new(color.green, 0), text = "BUY",  textcolor = color.white, size = size.small)
 plotshape(shortSig, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0),   text = "SELL", textcolor = color.white, size = size.small)
-plotshape(tp1Sig, "TP1", shape.circle, location.belowbar, color.new(color.green, 30), size = size.tiny)
-plotshape(tp2Sig, "TP2", shape.circle, location.belowbar, color.new(color.green, 15), size = size.tiny)
-plotshape(tp3Sig, "TP3", shape.circle, location.belowbar, color.new(color.green, 0),  size = size.tiny)
-plotshape(slSig,  "SL",  shape.xcross, location.abovebar, color.new(color.red, 0),    size = size.tiny)
+plotshape(tpHit, "TP", shape.circle, location.belowbar, color.new(color.green, 0), size = size.tiny)
+plotshape(slHit, "SL", shape.xcross, location.abovebar, color.new(color.red, 0),   size = size.tiny)
 
 // ============================== DASHBOARD ====================================
 f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
@@ -242,35 +254,35 @@ if showDash and barstate.islast
     bias = htfBull ? "▲ BULL" : htfBear ? "▼ BEAR" : "—"
     biasC = htfBull ? color.new(color.green, 0) : htfBear ? color.new(color.red, 0) : color.new(color.gray, 0)
     zone = demOn ? "demand armed" : supOn ? "supply armed" : "—"
-    st = inTrade ? (dir == 1 ? "● LONG (" + str.tostring(filled) + "/3)" : "● SHORT (" + str.tostring(filled) + "/3)") : "WAIT"
+    cd = cooled ? "ready" : "cooldown " + str.tostring(cooldownBars - (bar_index - lastExitBar)) + "b"
+    st = inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : longTrig ? "BUY now" : shortTrig ? "SELL now" : "WAIT"
     table.cell(dash, 0, 0, "APEX OB SCALPER 1m", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
     table.merge_cells(dash, 0, 0, 1, 0)
     table.cell(dash, 0, 1, "HTF bias", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 1, bias, text_color = cW, bgcolor = biasC, text_size = size.small)
     table.cell(dash, 0, 2, "Zone", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 2, zone, text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 3, "State", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 3, st, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 3, "State / cooldown", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 3, st + " · " + cd, text_color = cW, text_size = size.small)
     table.cell(dash, 0, 4, "Entry", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 4, inTrade ? str.tostring(entryP, "#.##") : "—", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 5, "Stop", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 5, inTrade ? str.tostring(slP, "#.##") : "—", text_color = color.red, text_size = size.small)
-    table.cell(dash, 0, 6, "TP1/2/3", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 6, inTrade ? str.tostring(t1, "#.#") + " " + str.tostring(t2, "#.#") + " " + str.tostring(t3, "#.#") : "—", text_color = color.green, text_size = size.small)
-    table.cell(dash, 0, 7, "— BACKTEST —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
+    table.cell(dash, 0, 5, "TP / SL  (1:" + str.tostring(effRR, "#.#") + ")", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 5, inTrade ? str.tostring(tpP, "#.#") + " / " + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 6, "Risk ($)", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 6, str.tostring(slDist, "#.#") + (useAdaptive ? "  (adaptive)" : ""), text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 7, "— BACKTEST (R) —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
     table.merge_cells(dash, 0, 7, 1, 7)
     table.cell(dash, 0, 8, "Trades / Win%", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 8, str.tostring(nT) + " / " + str.tostring(winRate, "#.#") + "%", text_color = cW, text_size = size.small)
-    table.cell(dash, 0, 9, "Avg R / total R", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 0, 9, "Avg R / total", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 9, str.tostring(avgR, "#.##") + "R / " + str.tostring(sumR, "#.#") + "R", text_color = avgR >= 0 ? color.green : color.red, text_size = size.small)
     table.cell(dash, 0, 10, "Profit factor", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 10, str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red, text_size = size.small)
 
 // ============================== ALERTS =======================================
 if longSig
-    alert("APEX OB BUY " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP1 " + str.tostring(t1, "#.##") + " TP2 " + str.tostring(t2, "#.##") + " TP3 " + str.tostring(t3, "#.##"), alert.freq_once_per_bar_close)
+    alert("APEX OB BUY " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | 1:" + str.tostring(tradeRR, "#.#"), alert.freq_once_per_bar_close)
 if shortSig
-    alert("APEX OB SELL " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP1 " + str.tostring(t1, "#.##") + " TP2 " + str.tostring(t2, "#.##") + " TP3 " + str.tostring(t3, "#.##"), alert.freq_once_per_bar_close)
+    alert("APEX OB SELL " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | 1:" + str.tostring(tradeRR, "#.#"), alert.freq_once_per_bar_close)
 alertcondition(longSig,  "OB Long Entry",  "Apex OB BUY")
 alertcondition(shortSig, "OB Short Entry", "Apex OB SELL")
-alertcondition(tp1Sig,   "OB TP1 hit",     "Apex OB TP1")
