@@ -1,0 +1,302 @@
+//@version=6
+// =============================================================================
+//  APEX KELTNER-RSI SCALPER  —  1-minute XAUUSD  (volatility-expansion momentum)
+// -----------------------------------------------------------------------------
+//  A standalone A/B partner to the OB Scalper. DIFFERENT profile by design:
+//  the OB Scalper buys PULLBACKS into zones (low win%, big 1:5). This one trades
+//  volatility BREAKOUTS with momentum (higher win%, moderate R:R) — it catches
+//  gold's session impulses instead of its retracements.
+//
+//   EXPANSION   : price closes OUTSIDE an ATR-based Keltner channel (auto-adapts
+//                 to gold's shifting volatility) — N closes = a real move, not a spike.
+//   MOMENTUM    : RSI on the trade's side of 50 confirms the thrust is genuine.
+//   FILTERS     : VWAP side (gold's anchor) + volume expansion, both NON-laggy.
+//                 Optional HTF-trend and London/NY session gates (the real
+//                 anti-chop tools for a breakout — no ADX lag).
+//   EXECUTION   : LOCKED entry / SL / TP. Stop = swing+ATR (default), fixed-$, or
+//                 the opposite band. One TP at a chosen R:R. Cut early if momentum
+//                 fails (close back thru the midline) + a time stop so nothing
+//                 sits stuck. Cooldown spaces trades out.
+//
+//  Non-repaint: commits on bar close. Tick volume on most gold feeds.
+//  Breakouts enter MID-move, so honest geometry is ~1:1.5–1:2.5, not 1:5.
+//  Not financial advice.
+// =============================================================================
+
+indicator("Apex Keltner-RSI Scalper [1m XAUUSD]", "ApexKR", overlay = true,
+     max_boxes_count = 80, max_lines_count = 100, max_labels_count = 200)
+
+// ============================== INPUTS =======================================
+gK = "① Keltner breakout"
+kLen       = input.int(20, "Keltner EMA length", minval = 1, group = gK)
+kAtrLen    = input.int(10, "Keltner ATR length", minval = 1, group = gK)
+kMult      = input.float(2.0, "Keltner ATR multiplier", minval = 0.1, step = 0.1, group = gK)
+needCloses = input.int(2, "Closes required outside band", minval = 1, maxval = 5, group = gK, tooltip = "The article's rule: 2+ consecutive closes beyond the band = a real expansion, not a one-bar spike. Higher = stricter, later signals.")
+useStrong  = input.bool(true, "Require a strong breakout candle", group = gK, tooltip = "The breakout bar must close in the top/bottom third of its range, in the trade direction — conviction, not a doji poke.")
+
+gM = "② Momentum (RSI)"
+rsiLen     = input.int(14, "RSI length", minval = 1, group = gM)
+rsiMid     = input.float(50, "RSI bull/bear line", minval = 1, maxval = 99, group = gM)
+useRsiExit = input.bool(false, "Exit if RSI hits overbought/oversold", group = gM, tooltip = "Optional momentum exit: close when RSI reaches the OB/OS band (likely exhaustion of the thrust).")
+rsiOB      = input.float(70, "  Overbought", minval = 50, maxval = 100, group = gM)
+rsiOS      = input.float(30, "  Oversold", minval = 0, maxval = 50, group = gM)
+
+gF = "③ Filters (non-laggy)"
+useVwap    = input.bool(true, "Breakout on the right side of VWAP", group = gF, tooltip = "Longs only above VWAP, shorts only below. Gold's institutional intraday anchor — cheap, no lag.")
+useVol     = input.bool(true, "Require volume expansion", group = gF)
+volMult    = input.float(1.3, "  Volume ≥ avg ×", minval = 0.1, step = 0.1, group = gF)
+volLen     = input.int(20, "  Volume avg length", minval = 1, group = gF)
+useHTF     = input.bool(false, "Require HTF trend agreement", group = gF, tooltip = "OFF for the raw strategy. ON = only breakouts aligned with the higher-timeframe EMA (higher quality, fewer trades). Plain EMA side, no laggy ADX.")
+htfRes     = input.timeframe("15", "  HTF timeframe", group = gF)
+htfEmaLen  = input.int(50, "  HTF EMA length", minval = 1, group = gF)
+useSession = input.bool(false, "Trade only London/NY hours", group = gF, tooltip = "Gold trends in London+NY, chops in the Asian session. ON = skip the chop — the best zero-lag anti-range filter for a breakout system. OFF for a raw A/B. Adjust hours to YOUR feed's exchange timezone.")
+sess       = input.session("0700-2000", "  Session (exchange time)", group = gF)
+
+gR = "④ Execution — locked levels"
+stopMode   = input.string("Swing + ATR", "Stop placement", options = ["Swing + ATR","Fixed $","Opposite band"], group = gR, tooltip = "Swing+ATR = beyond the recent swing (honest for breakouts). Fixed $ = constant dollar risk like the OB Scalper. Opposite band = the article's default (wide).")
+slDist     = input.float(10.0, "  Fixed $ stop distance", minval = 0.1, step = 0.5, group = gR)
+swingLook  = input.int(8, "  Swing look-back (bars)", minval = 1, group = gR)
+slBuf      = input.float(0.5, "  Swing buffer × ATR", minval = 0, step = 0.1, group = gR)
+rr         = input.float(2.0, "Reward : Risk (1 : X)", minval = 0.5, step = 0.5, group = gR, tooltip = "Breakouts enter mid-move, so geometry favours ~1:1.5–1:2.5, not 1:5. Locked at entry.")
+cooldownBars = input.int(10, "Cooldown after a trade (bars)", minval = 0, group = gR)
+useMidExit = input.bool(true, "Cut if momentum fails (close back thru midline)", group = gR, tooltip = "Exit early if price closes back through the Keltner mid (EMA) against you — the breakout failed. Banks or cuts before the full stop.")
+useTimeStop= input.bool(true, "Time stop (momentum should be fast)", group = gR)
+maxBars    = input.int(30, "  Max bars in trade", minval = 1, group = gR)
+useAdaptive= input.bool(false, "Adaptive: closer TP on a losing streak", group = gR, tooltip = "After consecutive losses, pull the target closer (down to the floor) to bank a win and reset. Back to full R:R after a win.")
+adaptRRmin = input.float(1.0, "  Adaptive RR floor", minval = 0.5, step = 0.5, group = gR)
+adaptStep  = input.float(0.25, "  Tighten per consecutive loss", minval = 0.05, step = 0.05, group = gR)
+
+gD = "⑤ Display"
+showDash   = input.bool(true, "Show dashboard", group = gD)
+dashPos    = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
+showBands  = input.bool(true, "Draw Keltner channel", group = gD)
+
+// ============================== CALCULATIONS =================================
+kEma   = ta.ema(close, kLen)
+kAtr   = ta.atr(kAtrLen)
+kUp    = kEma + kMult * kAtr
+kLo    = kEma - kMult * kAtr
+rsi    = ta.rsi(close, rsiLen)
+vwap   = ta.vwap
+volAvg = ta.sma(volume, volLen)
+atr    = ta.atr(14)
+swLo   = ta.lowest(low, swingLook)
+swHi   = ta.highest(high, swingLook)
+
+// non-repaint HTF trend
+htfEma   = request.security(syminfo.tickerid, htfRes, ta.ema(close, htfEmaLen)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfClose = request.security(syminfo.tickerid, htfRes, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfBull  = htfClose > htfEma
+htfBear  = htfClose < htfEma
+
+inSession = not useSession or not na(time(timeframe.period, sess))
+
+// consecutive closes outside the channel = expansion
+closeAbove = close > kUp
+closeBelow = close < kLo
+var int upCount = 0
+var int dnCount = 0
+upCount := closeAbove ? upCount + 1 : 0
+dnCount := closeBelow ? dnCount + 1 : 0
+
+// conviction candle (close in the top/bottom third, in direction)
+strongBull = close >= open and (close - low) >= 0.66 * (high - low)
+strongBear = close <= open and (high - close) >= 0.66 * (high - low)
+
+// ----- filters & confirmation ------------------------------------------------
+rsiBull   = rsi > rsiMid
+rsiBear   = rsi < rsiMid
+vwapOkL   = not useVwap or close > vwap
+vwapOkS   = not useVwap or close < vwap
+volOk     = not useVol  or volume >= volMult * volAvg
+htfOkL    = not useHTF  or htfBull
+htfOkS    = not useHTF  or htfBear
+strongOkL = not useStrong or strongBull
+strongOkS = not useStrong or strongBear
+
+// ============================== STATE MACHINE ================================
+var bool  inTrade  = false
+var int   dir      = 0
+var float entryP   = na
+var float slP      = na
+var float tpP      = na
+var float riskDist = na
+var float tradeRR  = na
+var int   entryBar = na
+var int   lossStreak = 0
+var int   lastExitBar = na
+var int   nT = 0
+var int   nW = 0
+var float sumR = 0.0
+var float grW = 0.0
+var float grL = 0.0
+
+effRR  = useAdaptive ? math.max(adaptRRmin, rr - lossStreak * adaptStep) : rr
+cooled = na(lastExitBar) or bar_index - lastExitBar >= cooldownBars
+
+longSig   = false
+shortSig  = false
+tpHit     = false
+slHit     = false
+exitEarly = false
+
+longTrig  = not inTrade and cooled and inSession and upCount >= needCloses and rsiBull and strongOkL and vwapOkL and volOk and htfOkL
+shortTrig = not inTrade and cooled and inSession and dnCount >= needCloses and rsiBear and strongOkS and vwapOkS and volOk and htfOkS
+
+if barstate.isconfirmed
+    if inTrade
+        bool  doExit = false
+        float exitP  = na
+        bool hitS = dir == 1 ? low  <= slP : high >= slP
+        bool hitT = dir == 1 ? high >= tpP : low  <= tpP
+        if hitS
+            exitP := slP
+            doExit := true
+            slHit := true
+        else if hitT
+            exitP := tpP
+            doExit := true
+            tpHit := true
+        else if useMidExit and (dir == 1 ? close < kEma : close > kEma)
+            exitP := close
+            doExit := true
+            exitEarly := true
+        else if useRsiExit and (dir == 1 ? rsi >= rsiOB : rsi <= rsiOS)
+            exitP := close
+            doExit := true
+            exitEarly := true
+        else if useTimeStop and bar_index - entryBar >= maxBars
+            exitP := close
+            doExit := true
+            exitEarly := true
+        if doExit
+            float r = dir * (exitP - entryP) / riskDist
+            nT := nT + 1
+            nW := nW + (r > 0 ? 1 : 0)
+            sumR := sumR + r
+            grW := grW + (r > 0 ? r : 0.0)
+            grL := grL + (r < 0 ? -r : 0.0)
+            lossStreak := r > 0 ? 0 : lossStreak + 1
+            lastExitBar := bar_index
+            inTrade := false
+            dir := 0
+    if not inTrade and (longTrig or shortTrig)
+        dir := longTrig ? 1 : -1
+        entryP := close
+        float rawSL = na
+        if stopMode == "Fixed $"
+            rawSL := entryP - dir * slDist
+        else if stopMode == "Opposite band"
+            rawSL := dir == 1 ? kLo : kUp
+        else
+            rawSL := dir == 1 ? math.min(swLo, low) - slBuf * atr : math.max(swHi, high) + slBuf * atr
+        float minR = 0.2 * atr
+        if dir == 1 and rawSL > entryP - minR
+            rawSL := entryP - minR
+        if dir == -1 and rawSL < entryP + minR
+            rawSL := entryP + minR
+        slP := rawSL
+        riskDist := math.abs(entryP - slP)
+        tradeRR := effRR
+        tpP := entryP + dir * tradeRR * riskDist
+        entryBar := bar_index
+        inTrade := true
+        longSig := longTrig
+        shortSig := shortTrig
+
+// ============================== STATS ========================================
+winRate = nT > 0 ? nW / nT * 100 : 0.0
+avgR    = nT > 0 ? sumR / nT : 0.0
+pf      = grL > 0 ? grW / grL : (grW > 0 ? 999.0 : 0.0)
+
+// ============================== KELTNER PLOTS ================================
+pMid = plot(showBands ? kEma : na, "Keltner mid", color.new(color.orange, 0), 1)
+pUp  = plot(showBands ? kUp  : na, "Keltner upper", color.new(color.gray, 20), 1)
+pLo  = plot(showBands ? kLo  : na, "Keltner lower", color.new(color.gray, 20), 1)
+fill(pUp, pLo, color.new(color.gray, 92))
+plot(vwap, "VWAP", color.new(color.purple, 0), 1, plot.style_circles)
+
+// ============================== TRADE LEVELS (boxes + labels) ================
+var box   bxSL    = na
+var box   bxTP    = na
+var line  lnEnt   = na
+var label lbBadge = na
+var label lbSL    = na
+var label lbTP    = na
+if longSig or shortSig
+    if not na(bxSL)
+        box.delete(bxSL)
+    if not na(bxTP)
+        box.delete(bxTP)
+    if not na(lnEnt)
+        line.delete(lnEnt)
+    if not na(lbBadge)
+        label.delete(lbBadge)
+    if not na(lbSL)
+        label.delete(lbSL)
+    if not na(lbTP)
+        label.delete(lbTP)
+    int xR = bar_index + 5
+    bxSL := box.new(bar_index, math.max(entryP, slP), xR, math.min(entryP, slP), border_color = color.new(color.red, 50), bgcolor = color.new(color.red, 85))
+    bxTP := box.new(bar_index, math.max(entryP, tpP), xR, math.min(entryP, tpP), border_color = color.new(color.green, 50), bgcolor = color.new(color.green, 85))
+    lnEnt := line.new(bar_index, entryP, xR, entryP, color = color.new(color.blue, 0), width = 2, style = line.style_dashed)
+    lbBadge := label.new(bar_index, entryP, (dir == 1 ? "BUY 1:" : "SELL 1:") + str.tostring(tradeRR, "#.#"), style = dir == 1 ? label.style_label_up : label.style_label_down, color = dir == 1 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor = color.white, size = size.small)
+    lbSL := label.new(xR, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.red, 10),   textcolor = color.white, size = size.small)
+    lbTP := label.new(xR, tpP, "TP " + str.tostring(tpP, "#.##"), style = label.style_label_left, color = color.new(color.green, 10), textcolor = color.white, size = size.small)
+else if inTrade and not na(bxSL)
+    int xR = bar_index + 5
+    box.set_right(bxSL, xR)
+    box.set_right(bxTP, xR)
+    line.set_x2(lnEnt, xR)
+    label.set_x(lbSL, xR)
+    label.set_x(lbTP, xR)
+
+// ============================== SIGNAL MARKERS ===============================
+plotshape(longSig,   "BUY",  shape.labelup,   location.belowbar, color.new(color.green, 0), text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(shortSig,  "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0),   text = "SELL", textcolor = color.white, size = size.small)
+plotshape(tpHit,     "TP",   shape.circle, location.belowbar, color.new(color.green, 0), size = size.tiny)
+plotshape(slHit,     "SL",   shape.xcross, location.abovebar, color.new(color.red, 0),   size = size.tiny)
+plotshape(exitEarly, "Exit", shape.square, location.abovebar, color.new(color.gray, 0),  size = size.tiny)
+
+// ============================== DASHBOARD ====================================
+f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+var table dash = table.new(f_pos(), 2, 12, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+if showDash and barstate.islast
+    cW = color.white
+    vwSide = close > vwap ? "▲ > VWAP" : close < vwap ? "▼ < VWAP" : "— VWAP"
+    vwC = close > vwap ? color.new(color.green, 0) : close < vwap ? color.new(color.red, 0) : color.new(color.gray, 0)
+    bandSt = upCount >= needCloses ? "▲ break up (" + str.tostring(upCount) + ")" : dnCount >= needCloses ? "▼ break down (" + str.tostring(dnCount) + ")" : close > kUp ? "above band" : close < kLo ? "below band" : "inside"
+    cd = cooled ? "ready" : "cooldown " + str.tostring(cooldownBars - (bar_index - lastExitBar)) + "b"
+    st = not inSession ? "out of session" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : longTrig ? "BUY now" : shortTrig ? "SELL now" : "WAIT"
+    table.cell(dash, 0, 0, "APEX KELTNER-RSI 1m", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
+    table.merge_cells(dash, 0, 0, 1, 0)
+    table.cell(dash, 0, 1, "Bias (VWAP)", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 1, vwSide + (useHTF ? (htfBull ? "  HTF▲" : htfBear ? "  HTF▼" : "") : ""), text_color = cW, bgcolor = vwC, text_size = size.small)
+    table.cell(dash, 0, 2, "RSI", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 2, str.tostring(rsi, "#.#") + (rsiBull ? "  bull" : rsiBear ? "  bear" : ""), text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 3, "Channel", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 3, bandSt, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 4, "State / cooldown", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 4, st + " · " + cd, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 5, "Entry", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 5, inTrade ? str.tostring(entryP, "#.##") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 6, "TP / SL  (1:" + str.tostring(effRR, "#.#") + ")", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 6, inTrade ? str.tostring(tpP, "#.#") + " / " + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 7, "Risk ($)", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 7, inTrade ? str.tostring(riskDist, "#.##") : (stopMode == "Fixed $" ? str.tostring(slDist, "#.#") : "≈swing"), text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 8, "— BACKTEST (R) —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
+    table.merge_cells(dash, 0, 8, 1, 8)
+    table.cell(dash, 0, 9, "Trades / Win%", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 9, str.tostring(nT) + " / " + str.tostring(winRate, "#.#") + "%", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 10, "Avg R / total", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 10, str.tostring(avgR, "#.##") + "R / " + str.tostring(sumR, "#.#") + "R", text_color = avgR >= 0 ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 11, "Profit factor", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 11, str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red, text_size = size.small)
+
+// ============================== ALERTS =======================================
+if longSig
+    alert("APEX KR BUY " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | 1:" + str.tostring(tradeRR, "#.#"), alert.freq_once_per_bar_close)
+if shortSig
+    alert("APEX KR SELL " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | 1:" + str.tostring(tradeRR, "#.#"), alert.freq_once_per_bar_close)
+alertcondition(longSig,  "KR Long Entry",  "Apex KR BUY")
+alertcondition(shortSig, "KR Short Entry", "Apex KR SELL")

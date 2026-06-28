@@ -1,6 +1,32 @@
 # Apex trading tools (XAUUSD) — Pine v6
 
-### ⭐ Newest: `ApexMTFSniper.pine` — Apex MTF Sniper
+## ⭐ 1-minute scalpers — two profiles, built to A/B
+
+Two standalone 1m tools that deliberately trade **different edges**. Run both,
+compare on **profit factor + avg-R** (not win%), keep the one that fits how you
+actually trade:
+
+- **`ApexOBScalper.pine`** — *Apex OB Scalper.* Buys **pullbacks** into order-block
+  / FVG zones, VWAP+EMA aligned, fixed-$ stop, one big **1:5** target. Low
+  win-rate **by design** (~25–30%); the rare runners carry it. Optional adaptive
+  TP + cooldown so the same level isn't hammered 3× in 10 min.
+- **`ApexKeltnerRSI.pine`** — *Apex Keltner-RSI Scalper.* Trades volatility
+  **breakouts**: N closes outside an ATR **Keltner** channel + an **RSI** thrust,
+  VWAP/volume confirmed. Moderate **1:2** R:R, **higher win-rate**, with fast
+  momentum + time exits so nothing sits stuck. Optional London/NY session + HTF gates.
+
+Both: non-repainting on bar close, **locked** entry/SL/TP boxes, phone alerts
+(`alert()` → "Any alert() function call"), and an **identical dashboard**
+(trades / win% / avg-R / profit factor) so the comparison is apples-to-apples.
+
+> **Why two?** A pullback system gets the best price + biggest R:R but a low
+> hit-rate; a breakout system gets a higher hit-rate at smaller R:R. They win in
+> *different regimes* — gold both trends and ranges — so the honest move is to
+> test both on your data, not to assume which is "better."
+
+---
+
+### `ApexMTFSniper.pine` — Apex MTF Sniper
 A multi-timeframe sniper built from proven reference indicators, fused into one
 locked signal:
 - **Entry** = **UT Bot** (ATR trailing stop) on your chart's timeframe (1m) — the
