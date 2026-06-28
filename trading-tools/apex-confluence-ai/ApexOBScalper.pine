@@ -28,6 +28,11 @@ useHTF   = input.bool(true, "Require HTF trend agreement", group = gH)
 emaLen   = input.int(50, "EMA trend filter", minval = 1, group = gH)
 useEma   = input.bool(true, "Require price on EMA side", group = gH)
 useVwap  = input.bool(true, "Require price on VWAP side", group = gH)
+useAdx   = input.bool(true, "Stand aside in chop (HTF ADX filter)", group = gH, tooltip = "Only trade when the HTF is actually TRENDING. ADX below the minimum = ranging / uncertain = no trades. Fixes 'kept shorting a stale bias in a low-volume range'.")
+adxLen   = input.int(14, "  ADX length", minval = 1, group = gH)
+adxMin   = input.float(20, "  Min ADX (trend strength)", minval = 0, group = gH)
+useSlope = input.bool(true, "Require HTF trend to be sloping (fresh bias)", group = gH, tooltip = "The HTF EMA must be actively rising (long) / falling (short) over the look-back, not a leftover bias from a finished trend.")
+slopeLook= input.int(10, "  HTF slope look-back (HTF bars)", minval = 1, group = gH)
 
 gZ = "② Support zones (OB / FVG)"
 atrLen   = input.int(14, "ATR length", minval = 1, group = gZ)
@@ -58,10 +63,18 @@ ema  = ta.ema(close, emaLen)
 vwap = ta.vwap
 volAvg = ta.sma(volume, volLen)
 
-htfClose = request.security(syminfo.tickerid, htfRes, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
-htfEma   = request.security(syminfo.tickerid, htfRes, ta.ema(close, emaLen)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
-htfBull  = htfClose > htfEma
-htfBear  = htfClose < htfEma
+f_htfAdx() =>
+    [dp_, dm_, ax_] = ta.dmi(adxLen, adxLen)
+    ax_
+htfClose   = request.security(syminfo.tickerid, htfRes, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfEma     = request.security(syminfo.tickerid, htfRes, ta.ema(close, emaLen)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfEmaPast = request.security(syminfo.tickerid, htfRes, ta.ema(close, emaLen)[slopeLook + (barstate.isrealtime ? 1 : 0)], lookahead = barmerge.lookahead_off)
+htfAdx     = request.security(syminfo.tickerid, htfRes, f_htfAdx()[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfRising  = htfEma > htfEmaPast
+htfFalling = htfEma < htfEmaPast
+htfBull  = htfClose > htfEma and (not useSlope or htfRising)
+htfBear  = htfClose < htfEma and (not useSlope or htfFalling)
+adxOk    = not useAdx or htfAdx >= adxMin
 
 // ----- the active demand / supply zone (fed by order blocks AND FVGs) --------
 var float demTop = na
@@ -143,8 +156,8 @@ shortSig = false
 tpHit    = false
 slHit    = false
 
-longTrig  = not inTrade and cooled and tapDem and bullEngulf and volOk and htfOkL and emaOkL and vwapOkL
-shortTrig = not inTrade and cooled and tapSup and bearEngulf and volOk and htfOkS and emaOkS and vwapOkS
+longTrig  = not inTrade and cooled and adxOk and tapDem and bullEngulf and volOk and htfOkL and emaOkL and vwapOkL
+shortTrig = not inTrade and cooled and adxOk and tapSup and bearEngulf and volOk and htfOkS and emaOkS and vwapOkS
 
 if barstate.isconfirmed
     if inTrade
@@ -251,15 +264,15 @@ f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ?
 var table dash = table.new(f_pos(), 2, 11, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 if showDash and barstate.islast
     cW = color.white
-    bias = htfBull ? "▲ BULL" : htfBear ? "▼ BEAR" : "—"
-    biasC = htfBull ? color.new(color.green, 0) : htfBear ? color.new(color.red, 0) : color.new(color.gray, 0)
+    bias = not adxOk ? "CHOP·skip" : htfBull ? "▲ BULL" : htfBear ? "▼ BEAR" : "—"
+    biasC = not adxOk ? color.new(color.orange, 0) : htfBull ? color.new(color.green, 0) : htfBear ? color.new(color.red, 0) : color.new(color.gray, 0)
     zone = demOn ? "demand armed" : supOn ? "supply armed" : "—"
     cd = cooled ? "ready" : "cooldown " + str.tostring(cooldownBars - (bar_index - lastExitBar)) + "b"
     st = inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : longTrig ? "BUY now" : shortTrig ? "SELL now" : "WAIT"
     table.cell(dash, 0, 0, "APEX OB SCALPER 1m", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
     table.merge_cells(dash, 0, 0, 1, 0)
     table.cell(dash, 0, 1, "HTF bias", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 1, bias, text_color = cW, bgcolor = biasC, text_size = size.small)
+    table.cell(dash, 1, 1, bias + " " + str.tostring(htfAdx, "#"), text_color = cW, bgcolor = biasC, text_size = size.small)
     table.cell(dash, 0, 2, "Zone", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 2, zone, text_color = cW, text_size = size.small)
     table.cell(dash, 0, 3, "State / cooldown", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
