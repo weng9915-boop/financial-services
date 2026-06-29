@@ -1,6 +1,6 @@
 {
   "name": "etoro",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "eToro trading bot \u2014 market research, limit-order execution, stop-loss management, and daily trade journal generation for eToro demo and live accounts.",
   "author": {
     "name": "eToro"
@@ -14,6 +14,11 @@
     "portfolio",
     "stop-loss",
     "limit-order",
-    "journal"
+    "journal",
+    "forex",
+    "gold",
+    "xauusd",
+    "london-session",
+    "scalping"
   ]
 }

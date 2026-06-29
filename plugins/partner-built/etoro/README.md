@@ -18,6 +18,7 @@ Claude plugin for automated stock trading on eToro — market research, discipli
 | `etoro-research` | "research NVDA", "check portfolio", "what's the MA on TSLA", "show me open positions" |
 | `etoro-trading` | "buy $500 of NVDA", "close position 12345", "run stop-loss check", "cancel pending orders" |
 | `trade-journal` | "generate today's journal", "fill in the trade journal", "morning brief" |
+| `london-session` | "is the London session open?", "check this gold setup", "can I take this XAUUSD trade?" |
 
 ## MCP Integration
 
@@ -61,6 +62,21 @@ python3 scripts/trade.py order 8104 500 sell 882.50 20000    # sell
 python3 scripts/trade.py close <positionId>                  # close a position
 python3 scripts/trade.py cancel                              # cancel all pending orders
 python3 scripts/trade.py stoploss                            # scan + auto-close breached positions
+```
+
+### London-Session Decision Engine (XAUUSD)
+
+Alert-only gold scalping discipline — returns **SIGNAL / ALERT / SKIP**, never auto-entries.
+Hard-codes the three gates where the money was lost: session+state lockout, trend-direction
+filter, and the candle-close + volume + engulfing confirmation gate. See
+`skills/london-session/SKILL.md` for the full rule set.
+
+```bash
+python3 scripts/london_session.py session                    # is the London window open now?
+python3 scripts/london_session.py check --trend up --price 2356.5 \
+    --prev-high 2362 --prev-low 2356 --volume 720 \
+    --candle-closed --engulfing --atr 18 --rsi 48 \
+    --trades-today 0 --losses-today 0 --news-minutes 300
 ```
 
 ## Trading Rules
