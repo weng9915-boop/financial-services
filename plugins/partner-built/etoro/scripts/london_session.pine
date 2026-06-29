@@ -1,0 +1,178 @@
+// London Session XAUUSD — Sweep-Edge Rules
+// ----------------------------------------------------------------------------
+// TradingView (Pine Script v5) port of scripts/london_session.py and the rules
+// in skills/london-session/SKILL.md. ALERT-ONLY — this plots levels and fires
+// alerts; it never places orders (it is an indicator, not a strategy).
+//
+// Hard-coded gates (where the money was lost):
+//   1. SESSION + STATE LOCKOUT  — London 15:00-17:30 MYT, max 2 trades/session
+//   2. TREND-DIRECTION FILTER   — long-only on higher lows, short-only on lower highs
+//   3. CONFIRMATION GATE        — engulfing close + volume >= build threshold
+//
+// Manual limitations (an indicator cannot see these):
+//   * News blackout — flip the "News blackout" input on within 2 hrs of NFP/CPI/Fed.
+//   * 2-loss lockout — indicators can't track your P&L; the script counts SIGNALS
+//     toward the 2-trade cap. Stop yourself manually after 2 losses.
+//   * Volume is the chart's (tick) volume — tune the thresholds to your feed.
+// ----------------------------------------------------------------------------
+//@version=5
+indicator("London Session XAUUSD — Sweep-Edge Rules", "London XAUUSD", overlay=true, max_lines_count=100, max_labels_count=100)
+
+// ── Inputs: session ──────────────────────────────────────────────────────
+grpS = "Session (London only)"
+sessTime     = input.session("1500-1730", "London session", group=grpS)
+sessTz       = input.string("Asia/Kuala_Lumpur", "Session timezone (MYT = UTC+8)", group=grpS)
+maxTrades    = input.int(2, "Max trades / session", minval=1, group=grpS)
+newsBlackout = input.bool(false, "News blackout active (manual)", tooltip="Turn on within 2 hrs of NFP/CPI/Fed — suppresses all signals", group=grpS)
+
+// ── Inputs: entry / risk ─────────────────────────────────────────────────
+grpE = "Entry / Risk"
+pipSize  = input.float(0.1, "Pip size (gold = 0.1)", group=grpE)
+edgePips = input.float(12, "Sweep-edge pips past prev high/low", group=grpE)
+slPips   = input.float(10, "Sweep SL buffer (pips)", group=grpE)
+atrLen   = input.int(14, "ATR length", minval=1, group=grpE)
+minRR    = input.float(2.1, "Min reward : risk", minval=0.1, group=grpE)
+proxPips = input.float(8, "ALERT proximity to sweep (pips)", group=grpE)
+
+// ── Inputs: confirmation ─────────────────────────────────────────────────
+grpC = "Confirmation"
+volSkip = input.float(400, "Volume: skip below", group=grpC)
+volBuild= input.float(500, "Volume: building (min to signal)", group=grpC)
+volConf = input.float(700, "Volume: confirmed", group=grpC)
+useRSI  = input.bool(true, "Use RSI filter", group=grpC)
+rsiLen  = input.int(14, "RSI length", minval=1, group=grpC)
+rsiOB   = input.float(70, "RSI overbought (block longs)", group=grpC)
+rsiOS   = input.float(30, "RSI oversold (block shorts)", group=grpC)
+
+// ── Inputs: trend ────────────────────────────────────────────────────────
+grpT = "Trend (set once at open)"
+pivLen = input.int(5, "Pivot lookback (bars)", minval=1, group=grpT)
+
+// ── Session detection ────────────────────────────────────────────────────
+t          = time(timeframe.period, sessTime, sessTz)
+inSession  = not na(t)
+newSession = inSession and not inSession[1]
+sessEnd    = not inSession and inSession[1]
+
+// Track the running high/low of the current session, freeze it as "previous
+// session" once the session closes — the sweep-edge entries key off these.
+var float curHigh      = na
+var float curLow       = na
+var float prevSessHigh = na
+var float prevSessLow  = na
+if newSession
+    curHigh := high
+    curLow  := low
+else if inSession
+    curHigh := math.max(curHigh, high)
+    curLow  := math.min(curLow, low)
+if sessEnd
+    prevSessHigh := curHigh
+    prevSessLow  := curLow
+
+// ── Trend: higher lows (long) vs lower highs (short) ─────────────────────
+ph = ta.pivothigh(pivLen, pivLen)
+pl = ta.pivotlow(pivLen, pivLen)
+var float lastPH = na
+var float prevPH = na
+var float lastPL = na
+var float prevPL = na
+if not na(ph)
+    prevPH := lastPH
+    lastPH := ph
+if not na(pl)
+    prevPL := lastPL
+    lastPL := pl
+higherLows = not na(lastPL) and not na(prevPL) and lastPL > prevPL
+lowerHighs = not na(lastPH) and not na(prevPH) and lastPH < prevPH
+
+// Session direction is locked once, at the open. Ambiguous structure => no trade.
+var string sessDir = na
+if newSession
+    sessDir := higherLows and not lowerHighs ? "long" : lowerHighs and not higherLows ? "short" : na
+
+// ── Entry / SL / TP (sweep-edge + ATR buffer + 1:minRR) ──────────────────
+atr = ta.atr(atrLen)
+var float entry   = na
+var float slLevel = na
+var float tpLevel = na
+if newSession
+    entry   := na
+    slLevel := na
+    tpLevel := na
+    if sessDir == "long" and not na(prevSessLow)
+        entry   := prevSessLow - edgePips * pipSize
+        slLevel := entry - (slPips * pipSize + atr)
+        tpLevel := entry + minRR * (entry - slLevel)
+    else if sessDir == "short" and not na(prevSessHigh)
+        entry   := prevSessHigh + edgePips * pipSize
+        slLevel := entry + (slPips * pipSize + atr)
+        tpLevel := entry - minRR * (slLevel - entry)
+
+// ── State: trades-per-session counter ────────────────────────────────────
+var int trades = 0
+if newSession
+    trades := 0
+
+// ── Confirmation gate ────────────────────────────────────────────────────
+bullEngulf = close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
+bearEngulf = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
+volOk      = volume >= volBuild
+rsi        = ta.rsi(close, rsiLen)
+rsiOkLong  = not useRSI or rsi < rsiOB
+rsiOkShort = not useRSI or rsi > rsiOS
+
+canTrade = inSession and not newsBlackout and trades < maxTrades
+
+// Sweep = price reaches the deep edge past the prior session high/low.
+longSweep  = not na(entry) and sessDir == "long"  and low  <= entry
+shortSweep = not na(entry) and sessDir == "short" and high >= entry
+
+longRaw  = canTrade and longSweep  and bullEngulf and volOk and rsiOkLong
+shortRaw = canTrade and shortSweep and bearEngulf and volOk and rsiOkShort
+
+// Fire once on the bar the gate newly passes (avoid duplicate counts).
+longSignal  = longRaw  and not longRaw[1]
+shortSignal = shortRaw and not shortRaw[1]
+if longSignal or shortSignal
+    trades += 1
+
+// ALERT = price approaching the sweep edge, confirmation not yet in.
+nearLong  = canTrade and sessDir == "long"  and not na(entry) and low  <= entry + proxPips * pipSize and low  > entry and not longRaw
+nearShort = canTrade and sessDir == "short" and not na(entry) and high >= entry - proxPips * pipSize and high < entry and not shortRaw
+
+// ── Plotting ─────────────────────────────────────────────────────────────
+bgcolor(inSession ? color.new(color.blue, 93) : na, title="London session")
+bgcolor(newsBlackout and inSession ? color.new(color.orange, 82) : na, title="News blackout")
+
+plot(inSession and not na(entry)   ? entry   : na, "Entry", color.new(color.blue, 0),  2, plot.style_linebr)
+plot(inSession and not na(slLevel) ? slLevel : na, "SL",    color.new(color.red, 0),   1, plot.style_linebr)
+plot(inSession and not na(tpLevel) ? tpLevel : na, "TP",    color.new(color.green, 0), 1, plot.style_linebr)
+
+plotshape(longSignal,  "LONG signal",  shape.triangleup,   location.belowbar, color.new(color.green, 0), text="LONG",  textcolor=color.white, size=size.small)
+plotshape(shortSignal, "SHORT signal", shape.triangledown, location.abovebar, color.new(color.red, 0),   text="SHORT", textcolor=color.white, size=size.small)
+plotshape(nearLong or nearShort, "Approaching sweep", shape.circle, location.belowbar, color.new(color.yellow, 0), size=size.tiny)
+
+// ── Status table ─────────────────────────────────────────────────────────
+volState = volume < volSkip ? "skip <" + str.tostring(volSkip, "#") : volume < volBuild ? "building" : volume >= volConf ? "confirmed" : "building"
+state    = newsBlackout ? "NEWS BLACKOUT" : not inSession ? "session closed" : trades >= maxTrades ? "locked (" + str.tostring(trades) + " trades)" : na(sessDir) ? "no direction" : longSignal ? "SIGNAL long" : shortSignal ? "SIGNAL short" : (nearLong or nearShort) ? "ALERT — approaching" : "watching " + sessDir
+
+var table tbl = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    table.cell(tbl, 0, 0, "London XAUUSD", text_color=color.white, bgcolor=color.new(color.blue, 0), text_size=size.small)
+    table.cell(tbl, 1, 0, state, text_color=color.white, bgcolor=color.new(color.blue, 0), text_size=size.small)
+    table.cell(tbl, 0, 1, "Direction", text_size=size.small)
+    table.cell(tbl, 1, 1, na(sessDir) ? "—" : sessDir, text_size=size.small)
+    table.cell(tbl, 0, 2, "Trades", text_size=size.small)
+    table.cell(tbl, 1, 2, str.tostring(trades) + " / " + str.tostring(maxTrades), text_size=size.small)
+    table.cell(tbl, 0, 3, "Volume", text_size=size.small)
+    table.cell(tbl, 1, 3, volState, text_size=size.small)
+    table.cell(tbl, 0, 4, "Entry", text_size=size.small)
+    table.cell(tbl, 1, 4, na(entry) ? "—" : str.tostring(entry, format.mintick), text_size=size.small)
+    table.cell(tbl, 0, 5, "SL / TP", text_size=size.small)
+    table.cell(tbl, 1, 5, na(slLevel) ? "—" : str.tostring(slLevel, format.mintick) + " / " + str.tostring(tpLevel, format.mintick), text_size=size.small)
+
+// ── Alerts (alert-only — you place the order) ─────────────────────────────
+alertcondition(longSignal,            "London LONG signal",  "XAUUSD London LONG sweep-edge signal — set TP/SL, lot 0.02, you click the order")
+alertcondition(shortSignal,           "London SHORT signal", "XAUUSD London SHORT sweep-edge signal — set TP/SL, lot 0.02, you click the order")
+alertcondition(nearLong or nearShort, "Approaching sweep",   "XAUUSD approaching London sweep level — watch for confirmation candle close")

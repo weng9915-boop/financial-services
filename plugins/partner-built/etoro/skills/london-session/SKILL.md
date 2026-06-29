@@ -30,6 +30,11 @@ passed or failed. Use `--now "2026-06-29T15:20"` to override the clock (MYT) for
 If any gate fails the answer is **SKIP** — relay the failed gate to the user verbatim and
 do not soften it.
 
+For charting, `scripts/london_session.pine` is the TradingView (Pine Script v5) version of
+the same rules — paste it into the Pine Editor on an XAUUSD chart. It plots the sweep-edge
+levels, shades the session, and fires LONG/SHORT/approaching alerts. It is alert-only and
+shares this skill's gates; news blackout and the 2-loss lockout are manual inputs there.
+
 ## 1. Core Rules (non-negotiable)
 
 | Rule | Value |

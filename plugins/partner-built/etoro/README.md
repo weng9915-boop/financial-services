@@ -79,6 +79,26 @@ python3 scripts/london_session.py check --trend up --price 2356.5 \
     --trades-today 0 --losses-today 0 --news-minutes 300
 ```
 
+### TradingView Indicator (Pine Script)
+
+`scripts/london_session.pine` is the chart version of the same rules — alert-only,
+never an auto-trader. Paste it into TradingView's **Pine Editor** → **Add to chart**
+(use it on an XAUUSD chart, M5/M15). It plots the sweep-edge entry/SL/TP levels,
+shades the London session, marks LONG/SHORT signals and "approaching sweep" alerts,
+and shows a live status table (direction, trade count, volume state).
+
+| Hard-coded gate | Behaviour |
+|---|---|
+| Session + state lockout | Signals only inside 15:00–17:30 MYT; locks after `Max trades / session` |
+| Trend filter | Long-only on higher lows, short-only on lower highs (set once at open) |
+| Confirmation gate | Engulfing candle close + volume ≥ build threshold (+ optional RSI) |
+
+Manual inputs an indicator can't infer: flip **News blackout** on within 2 hrs of
+NFP/CPI/Fed, and stop yourself after 2 *losses* (the chart counts signals, not P&L).
+Wire the three `alertcondition`s ("London LONG/SHORT signal", "Approaching sweep")
+via TradingView's **Create Alert** dialog. Tune the volume thresholds to your feed —
+gold volume on TradingView is tick volume.
+
 ## Trading Rules
 
 All three rules are enforced in code and cannot be bypassed:
