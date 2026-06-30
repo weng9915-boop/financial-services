@@ -22,8 +22,11 @@ today's Asia H/L) is **swept and reclaimed** — the manipulation in real time.
   entering — your plan: confirm → retest → close-confirm → enter.
 - ***Sweep + candle* (instant):** enter right on the sweep+candle bar.
 
-HTF bias, momentum, and CHoCH are **optional filters, off by default**. Direction =
-the reversal of the sweep (fade the raid, ride the distribution).
+**Optional filters, all off by default** (add to tighten): HTF bias, momentum,
+CHoCH, **SMT divergence** (a correlated market — silver/DXY — fails to confirm the
+sweep = real manipulation), and **strong S/R** (the swept level must have been
+touched ≥N times = a confirmed level, not one a single raid manufactured).
+Direction = the reversal of the sweep (fade the raid, ride the distribution).
 
 → **Execution — TP/SL at KEY LEVELS, not a ratio** (they move as price does):
 - **SL** *Beyond key level* (just past the swept/retested level), or beyond the

@@ -21,7 +21,7 @@
 // =============================================================================
 
 indicator("Apex Session SMC [XAUUSD]", "ApexSMC", overlay = true,
-     max_boxes_count = 60, max_lines_count = 80, max_labels_count = 200)
+     max_boxes_count = 60, max_lines_count = 80, max_labels_count = 200, max_bars_back = 500)
 
 // ============================== HELPERS ======================================
 f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
@@ -37,6 +37,13 @@ f_phase(float o, float h, float l, float c, float pHi, float pLo, float refR) =>
     int dr = swHi ? -1 : swLo ? 1 : (c > o ? 1 : -1)
     [ph, dr]
 f_chk(bool b) => b ? "✓" : "✗"
+f_touches(float lvl, float tol, int look) =>
+    int c = 0
+    if not na(lvl)
+        for i = 0 to look - 1
+            if math.abs(high[i] - lvl) <= tol or math.abs(low[i] - lvl) <= tol
+                c := c + 1
+    c
 
 // ============================== ① SESSIONS ===================================
 gS = "① Sessions (UTC — adjust to your feed)"
@@ -67,6 +74,17 @@ pivLen      = input.int(3, "  CHoCH swing sensitivity", minval = 1, group = gE)
 entryMode  = input.string("Retest zone (plan)", "Entry style", options = ["Retest zone (plan)","Sweep + candle (instant)"], group = gE, tooltip = "Retest (your plan): the sweep CONFIRMS direction, then WAIT for price to pull back and retest the level and CLOSE with a candle before entering. Instant: enter right on the sweep+candle bar.")
 retestBars = input.int(20, "  Retest valid for (bars)", minval = 1, group = gE)
 retestTol  = input.float(0.5, "  Retest tolerance × ATR", minval = 0.05, step = 0.05, group = gE)
+
+// ============================== EXTRA CONFIRMATIONS (optional) ===============
+gX = "Extra confirmations (optional)"
+requireSMT = input.bool(false, "Require SMT divergence", group = gX, tooltip = "Smart-Money Technique: take the sweep only if a CORRELATED market fails to confirm the new extreme — divergence = a stop-raid (manipulation), not real flow.")
+smtSym  = input.symbol("OANDA:XAGUSD", "  Correlated symbol", group = gX)
+smtCorr = input.string("Positive", "  Correlation to gold", options = ["Positive","Inverse"], group = gX, tooltip = "Positive = moves WITH gold (silver XAGUSD). Inverse = moves AGAINST gold (DXY / USD).")
+smtLen  = input.int(10, "  SMT swing lookback", minval = 2, group = gX)
+useStrongSR = input.bool(false, "Require strong (tested) level", group = gX, tooltip = "Only trade a swept level that has been TOUCHED several times recently — a confirmed S/R, not a random level a single raid manufactured.")
+srTouches = input.int(2, "  Min touches", minval = 1, group = gX)
+srLook    = input.int(50, "  Touch lookback (bars)", minval = 5, maxval = 480, group = gX)
+srTol     = input.float(0.4, "  Touch tolerance × ATR", minval = 0.05, step = 0.05, group = gX)
 
 // ============================== ④ EXECUTION ==================================
 gR = "④ Execution — locked levels"
@@ -295,6 +313,16 @@ sweepHiNow = (usePoolSess and f_swHi(lastSessHi)) or (usePoolPD and f_swHi(pdh))
 swLoName = (usePoolSess and f_swLo(lastSessLo)) ? lastSessName + "·L" : (usePoolPD and f_swLo(pdl)) ? "PDL" : (usePoolPW and f_swLo(pwl)) ? "PWL" : (usePoolAsia and f_swLo(asiaL)) ? "Asia·L" : "—"
 swHiName = (usePoolSess and f_swHi(lastSessHi)) ? lastSessName + "·H" : (usePoolPD and f_swHi(pdh)) ? "PDH" : (usePoolPW and f_swHi(pwh)) ? "PWH" : (usePoolAsia and f_swHi(asiaH)) ? "Asia·H" : "—"
 
+// ----- SMT divergence: a correlated market fails to confirm the new extreme ---
+smtRefLow  = request.security(smtSym, timeframe.period, low,  lookahead = barmerge.lookahead_off)
+smtRefHigh = request.security(smtSym, timeframe.period, high, lookahead = barmerge.lookahead_off)
+gLL = low  < ta.lowest(low,  smtLen)[1]
+gHH = high > ta.highest(high, smtLen)[1]
+rLL = smtRefLow  < ta.lowest(smtRefLow,  smtLen)[1]
+rHH = smtRefHigh > ta.highest(smtRefHigh, smtLen)[1]
+smtBull = smtCorr == "Positive" ? (gLL and not rLL) : (gLL and not rHH)
+smtBear = smtCorr == "Positive" ? (gHH and not rHH) : (gHH and not rLL)
+
 // ============================== STATE MACHINE ================================
 var bool  inTrade  = false
 var int   dir      = 0
@@ -325,10 +353,12 @@ slHit     = false
 exitEarly = false
 
 // ----- 2-stage retest flow: arm on the sweep, enter on the retest close ------
-armBullNow = sweepLoNow and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull)
-armBearNow = sweepHiNow and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear)
 swpLoPrice = (usePoolSess and f_swLo(lastSessLo)) ? lastSessLo : (usePoolPD and f_swLo(pdl)) ? pdl : (usePoolPW and f_swLo(pwl)) ? pwl : (usePoolAsia and f_swLo(asiaL)) ? asiaL : na
 swpHiPrice = (usePoolSess and f_swHi(lastSessHi)) ? lastSessHi : (usePoolPD and f_swHi(pdh)) ? pdh : (usePoolPW and f_swHi(pwh)) ? pwh : (usePoolAsia and f_swHi(asiaH)) ? asiaH : na
+strongLo = f_touches(swpLoPrice, srTol * atr, srLook) >= srTouches
+strongHi = f_touches(swpHiPrice, srTol * atr, srLook) >= srTouches
+armBullNow = sweepLoNow and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo)
+armBearNow = sweepHiNow and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi)
 if armBullNow
     pendDir := 1
     zLvl := swpLoPrice
@@ -344,8 +374,8 @@ if pendDir == -1 and (close > zLvl + retestTol * atr or bar_index - pendBar > re
 retestBull = pendDir == 1 and bar_index > pendBar and low  <= zLvl + retestTol * atr and bullConf
 retestBear = pendDir == -1 and bar_index > pendBar and high >= zLvl - retestTol * atr and bearConf
 
-trigBull = entryMode == "Retest zone (plan)" ? retestBull : (sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull))
-trigBear = entryMode == "Retest zone (plan)" ? retestBear : (sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear))
+trigBull = entryMode == "Retest zone (plan)" ? retestBull : (sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo))
+trigBear = entryMode == "Retest zone (plan)" ? retestBear : (sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi))
 
 if barstate.isconfirmed
     if inTrade
@@ -538,7 +568,7 @@ if showDash and barstate.islast
     liveHint = (sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—"
     expC = lastSessPhase == "Manip" ? color.new(color.green, 20) : lastSessPhase == "Accum" ? color.new(color.orange, 20) : color.new(color.gray, 30)
     okEntry = trigBull or trigBear
-    fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) : "")
+    fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) : "")
     fStr := fStr == "" ? "soft (none)" : fStr
     verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? (pendDir == 1 ? "⌛ wait retest ▲" : "⌛ wait retest ▼") : "WAIT"
     verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)
