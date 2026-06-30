@@ -15,23 +15,31 @@ instead of assuming it:
   manipulation → expect distribution in the reversal direction; after
   distribution → expect a pullback.
 
-**Entry — loose enough to actually fire:** a **liquidity pool** (last session H/L,
-prev day/week H/L, today's Asia H/L) is **swept and reclaimed** — the manipulation
-happening in real time — and a **confirming candlestick** (engulfing / pin /
-strong-body, never a doji) is the **trigger**. HTF bias, momentum, and CHoCH are
-**optional filters, off by default** — add them to tighten. Direction = the
-reversal of the sweep (you fade the raid and ride the distribution).
+**Entry — two styles:** a **liquidity pool** (last session H/L, prev day/week H/L,
+today's Asia H/L) is **swept and reclaimed** — the manipulation in real time.
+- ***Retest zone* (default):** the sweep *confirms direction*, then it **waits for
+  price to pull back and retest that level and close with a candle** before
+  entering — your plan: confirm → retest → close-confirm → enter.
+- ***Sweep + candle* (instant):** enter right on the sweep+candle bar.
 
-→ **Execution:** LOCKED entry / SL (beyond the swept wick with a min-ATR floor, or
-fixed-$). **Target reaches for the furthest pips** — *Trail runner* (breakeven at
-+1R then trail the extreme, RR unbounded — captures the whole distribution leg),
-*Furthest pool* (aim at the farthest weekly/daily liquidity), or *Fixed RR*.
-Cooldown, opposite-sweep cut, time stop (off for runners so they run).
+HTF bias, momentum, and CHoCH are **optional filters, off by default**. Direction =
+the reversal of the sweep (fade the raid, ride the distribution).
+
+→ **Execution — TP/SL at KEY LEVELS, not a ratio** (they move as price does):
+- **SL** *Beyond key level* (just past the swept/retested level), or beyond the
+  wick, or fixed-$ — with a min-ATR floor so it's never a micro-stop.
+- **TP** *Next key level* (nearest opposing structure), *Trail runner* (breakeven
+  +1R then trail for the furthest pips), *Furthest pool*, or *Fixed RR*.
+Cooldown, opposite-sweep cut, time stop (off for runners).
+
+**Also on the chart:** **HTF candle coloring** (green up / red down, custom TF,
+1h default) and **session shading** for Asia / London / New York, split morning
+and noon.
 
 The dashboard shows the **current session + live phase**, **today's A/L/N phases**,
 the **next-session expectation**, the entry checklist (pool swept ✓ / candle ✓ /
-filters), locked levels, the **session-role tallies**, and an R-based self-backtest.
-Non-repaint on bar close; phone alerts via `alert()`.
+filters) with a `⌛ wait retest` state, locked levels, the **session-role tallies**,
+and an R-based self-backtest. Non-repaint on bar close; phone alerts via `alert()`.
 
 > Sessions are in **UTC** by default — adjust the three session windows to your
 > feed's clock so the phase detection lines up with the real sessions.

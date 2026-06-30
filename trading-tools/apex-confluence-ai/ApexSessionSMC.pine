@@ -51,7 +51,7 @@ expandMult = input.float(1.2, "Distribution range ≥ avg ×", minval = 1.0, ste
 dirThresh  = input.float(0.6, "Directional body ≥ range ×", minval = 0.1, maxval = 1.0, step = 0.05, group = gF)
 
 // ============================== ③ ENTRY ======================================
-gE = "③ Entry — sweep + candle"
+gE = "③ Entry — confirm → retest → close"
 usePoolSess = input.bool(true, "Pool: last completed session H/L", group = gE)
 usePoolPD   = input.bool(true, "Pool: prev day H/L", group = gE)
 usePoolPW   = input.bool(true, "Pool: prev week H/L", group = gE)
@@ -64,15 +64,18 @@ requireMom  = input.bool(false, "Filter: momentum must agree", group = gE)
 momTool     = input.string("Stochastic", "  Momentum tool", options = ["Stochastic","CCI"], group = gE)
 requireChoch= input.bool(false, "Filter: CHoCH must confirm", group = gE)
 pivLen      = input.int(3, "  CHoCH swing sensitivity", minval = 1, group = gE)
+entryMode  = input.string("Retest zone (plan)", "Entry style", options = ["Retest zone (plan)","Sweep + candle (instant)"], group = gE, tooltip = "Retest (your plan): the sweep CONFIRMS direction, then WAIT for price to pull back and retest the level and CLOSE with a candle before entering. Instant: enter right on the sweep+candle bar.")
+retestBars = input.int(20, "  Retest valid for (bars)", minval = 1, group = gE)
+retestTol  = input.float(0.5, "  Retest tolerance × ATR", minval = 0.05, step = 0.05, group = gE)
 
 // ============================== ④ EXECUTION ==================================
 gR = "④ Execution — locked levels"
 atrLen   = input.int(14, "ATR length", minval = 1, group = gR)
-stopMode = input.string("Beyond sweep + ATR", "Stop placement", options = ["Beyond sweep + ATR","Fixed $"], group = gR)
+stopMode = input.string("Beyond key level", "Stop placement", options = ["Beyond key level","Beyond sweep + ATR","Fixed $"], group = gR, tooltip = "Beyond key level = SL sits just past the swept/retested LEVEL (structure-based, not a ratio) — moves with price as the levels do.")
 slDist   = input.float(10.0, "  Fixed $ stop distance", minval = 0.1, step = 0.5, group = gR)
 slBuf    = input.float(0.3, "  Sweep buffer × ATR", minval = 0, step = 0.1, group = gR)
 minStopAtr = input.float(0.8, "  Min stop × ATR (no micro-stops)", minval = 0, step = 0.1, group = gR, tooltip = "Floor on stop distance so a tiny sweep wick doesn't make a micro-stop that gets wicked out and a too-small trade. Wider stop = a touch lower RR but survivable.")
-tgtMode  = input.string("Trail runner", "Target mode", options = ["Trail runner","Furthest pool","Fixed RR"], group = gR, tooltip = "Trail runner = chase the FURTHEST pips: go to breakeven at +1R then trail — captures the whole distribution leg, RR unbounded. Furthest pool = aim at the farthest liquidity (weekly/daily). Fixed RR = a set multiple.")
+tgtMode  = input.string("Next key level", "Target mode", options = ["Next key level","Trail runner","Furthest pool","Fixed RR"], group = gR, tooltip = "Next key level = TP at the NEAREST opposing key level (structure, not a ratio). Trail runner = breakeven at +1R then trail for the furthest pips. Furthest pool = the farthest liquidity. Fixed RR = a set multiple.")
 rr       = input.float(5.0, "Reward : Risk (Fixed RR mode)", minval = 0.5, step = 0.5, group = gR)
 beR      = input.float(1.0, "  Runner: breakeven at +R", minval = 0.1, step = 0.1, group = gR)
 trailAtr = input.float(2.0, "  Runner: trail × ATR", minval = 0.1, step = 0.1, group = gR, tooltip = "After breakeven the stop trails this far behind the extreme. Wider = lets it breathe and run further; tighter = banks sooner.")
@@ -87,6 +90,18 @@ gD = "⑤ Display"
 showDash = input.bool(true, "Show dashboard", group = gD)
 dashPos  = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
 drawLevels = input.bool(true, "Draw key levels / pools", group = gD)
+colorHTF   = input.bool(true, "Color candles by HTF trend", group = gD, tooltip = "Green when the higher timeframe is up (close > its EMA50), red when down. Use it as a constant background bias read.")
+htfColorTF = input.timeframe("60", "  HTF for candle color", group = gD)
+
+// ============================== ⑥ SESSION SHADING ===========================
+gV = "⑥ Session shading (UTC)"
+drawSess = input.bool(true, "Shade sessions on chart", group = gV)
+asiaAM = input.session("2300-0300", "Asia morning", group = gV)
+asiaPM = input.session("0300-0700", "Asia noon", group = gV)
+lonAM  = input.session("0700-0930", "London morning", group = gV)
+lonPM  = input.session("0930-1200", "London noon", group = gV)
+nyAM   = input.session("1200-1500", "New York morning", group = gV)
+nyPM   = input.session("1500-2100", "New York noon", group = gV)
 
 // ============================== CALCULATIONS =================================
 atr = ta.atr(atrLen)
@@ -102,6 +117,12 @@ htfClose = request.security(syminfo.tickerid, biasTF, close[barstate.isrealtime 
 htfEma   = request.security(syminfo.tickerid, biasTF, ta.ema(close, 50)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
 biasBull = htfClose > htfEma
 biasBear = htfClose < htfEma
+
+// HTF trend for candle coloring (independent custom TF)
+htfcClose = request.security(syminfo.tickerid, htfColorTF, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfcEma   = request.security(syminfo.tickerid, htfColorTF, ta.ema(close, 50)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfcUp = htfcClose > htfcEma
+htfcDn = htfcClose < htfcEma
 
 // optional momentum (state, not a same-bar cross)
 stochK = ta.sma(ta.stoch(close, high, low, 14), 3)
@@ -285,6 +306,9 @@ var float tradeRR  = na
 var int   entryBar = na
 var float peakP    = na
 var bool  beDone   = false
+var int   pendDir  = 0
+var float zLvl     = na
+var int   pendBar  = na
 var int   lastExitBar = na
 var int   nT = 0
 var int   nW = 0
@@ -300,8 +324,28 @@ tpHit     = false
 slHit     = false
 exitEarly = false
 
-trigBull = sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull)
-trigBear = sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear)
+// ----- 2-stage retest flow: arm on the sweep, enter on the retest close ------
+armBullNow = sweepLoNow and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull)
+armBearNow = sweepHiNow and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear)
+swpLoPrice = (usePoolSess and f_swLo(lastSessLo)) ? lastSessLo : (usePoolPD and f_swLo(pdl)) ? pdl : (usePoolPW and f_swLo(pwl)) ? pwl : (usePoolAsia and f_swLo(asiaL)) ? asiaL : na
+swpHiPrice = (usePoolSess and f_swHi(lastSessHi)) ? lastSessHi : (usePoolPD and f_swHi(pdh)) ? pdh : (usePoolPW and f_swHi(pwh)) ? pwh : (usePoolAsia and f_swHi(asiaH)) ? asiaH : na
+if armBullNow
+    pendDir := 1
+    zLvl := swpLoPrice
+    pendBar := bar_index
+if armBearNow
+    pendDir := -1
+    zLvl := swpHiPrice
+    pendBar := bar_index
+if pendDir == 1 and (close < zLvl - retestTol * atr or bar_index - pendBar > retestBars)
+    pendDir := 0
+if pendDir == -1 and (close > zLvl + retestTol * atr or bar_index - pendBar > retestBars)
+    pendDir := 0
+retestBull = pendDir == 1 and bar_index > pendBar and low  <= zLvl + retestTol * atr and bullConf
+retestBear = pendDir == -1 and bar_index > pendBar and high >= zLvl - retestTol * atr and bearConf
+
+trigBull = entryMode == "Retest zone (plan)" ? retestBull : (sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull))
+trigBear = entryMode == "Retest zone (plan)" ? retestBear : (sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear))
 
 if barstate.isconfirmed
     if inTrade
@@ -346,7 +390,8 @@ if barstate.isconfirmed
     if not inTrade and cooled and (trigBull or trigBear)
         dir := trigBull ? 1 : -1
         entryP := close
-        float rawSL = dir == 1 ? (stopMode == "Fixed $" ? entryP - slDist : low - slBuf * atr) : (stopMode == "Fixed $" ? entryP + slDist : high + slBuf * atr)
+        float prot = dir == 1 ? (not na(zLvl) ? math.min(zLvl, low) : low) : (not na(zLvl) ? math.max(zLvl, high) : high)
+        float rawSL = stopMode == "Fixed $" ? (dir == 1 ? entryP - slDist : entryP + slDist) : stopMode == "Beyond key level" ? (dir == 1 ? prot - slBuf * atr : prot + slBuf * atr) : (dir == 1 ? low - slBuf * atr : high + slBuf * atr)
         float floorSL = dir == 1 ? entryP - minStopAtr * atr : entryP + minStopAtr * atr
         rawSL := dir == 1 ? math.min(rawSL, floorSL) : math.max(rawSL, floorSL)
         float minR = 0.2 * atr
@@ -357,7 +402,28 @@ if barstate.isconfirmed
         slP := rawSL
         riskDist := math.abs(entryP - slP)
         float tp = entryP + dir * rr * riskDist
-        if tgtMode == "Furthest pool"
+        if tgtMode == "Next key level"
+            float t = na
+            if dir == 1
+                if not na(pdh) and pdh > entryP + riskDist
+                    t := pdh
+                if not na(pwh) and pwh > entryP + riskDist and (na(t) or pwh < t)
+                    t := pwh
+                if not na(lastSessHi) and lastSessHi > entryP + riskDist and (na(t) or lastSessHi < t)
+                    t := lastSessHi
+                if not na(asiaH) and asiaH > entryP + riskDist and (na(t) or asiaH < t)
+                    t := asiaH
+            else
+                if not na(pdl) and pdl < entryP - riskDist
+                    t := pdl
+                if not na(pwl) and pwl < entryP - riskDist and (na(t) or pwl > t)
+                    t := pwl
+                if not na(lastSessLo) and lastSessLo < entryP - riskDist and (na(t) or lastSessLo > t)
+                    t := lastSessLo
+                if not na(asiaL) and asiaL < entryP - riskDist and (na(t) or asiaL > t)
+                    t := asiaL
+            tp := not na(t) ? t : entryP + dir * rr * riskDist
+        else if tgtMode == "Furthest pool"
             float t = na
             if dir == 1
                 if not na(pdh) and pdh > entryP
@@ -384,6 +450,7 @@ if barstate.isconfirmed
         inTrade := true
         longSig := trigBull
         shortSig := trigBear
+        pendDir := 0
 
 // ============================== STATS ========================================
 winRate = nT > 0 ? nW / nT * 100 : 0.0
@@ -399,6 +466,23 @@ plot(drawLevels and usePoolAsia ? asiaH : na, "Asia H", color.new(color.aqua, 30
 plot(drawLevels and usePoolAsia ? asiaL : na, "Asia L", color.new(color.aqua, 30), 1, plot.style_linebr)
 plot(drawLevels and usePoolSess ? lastSessHi : na, "Last H", color.new(color.gray, 20), 1, plot.style_linebr)
 plot(drawLevels and usePoolSess ? lastSessLo : na, "Last L", color.new(color.gray, 20), 1, plot.style_linebr)
+
+// HTF trend candle coloring (green up / red down)
+barcolor(colorHTF ? (htfcUp ? color.new(color.green, 25) : htfcDn ? color.new(color.red, 25) : na) : na)
+
+// session shading — morning / noon per session
+inAsiaAM = not na(time(timeframe.period, asiaAM, "GMT+0"))
+inAsiaPM = not na(time(timeframe.period, asiaPM, "GMT+0"))
+inLonAM  = not na(time(timeframe.period, lonAM,  "GMT+0"))
+inLonPM  = not na(time(timeframe.period, lonPM,  "GMT+0"))
+inNyAM   = not na(time(timeframe.period, nyAM,   "GMT+0"))
+inNyPM   = not na(time(timeframe.period, nyPM,   "GMT+0"))
+bgcolor(drawSess and inAsiaAM ? color.new(color.blue,   93) : na, title = "Asia morning")
+bgcolor(drawSess and inAsiaPM ? color.new(color.blue,   88) : na, title = "Asia noon")
+bgcolor(drawSess and inLonAM  ? color.new(color.green,  93) : na, title = "London morning")
+bgcolor(drawSess and inLonPM  ? color.new(color.green,  88) : na, title = "London noon")
+bgcolor(drawSess and inNyAM   ? color.new(color.orange, 93) : na, title = "New York morning")
+bgcolor(drawSess and inNyPM   ? color.new(color.orange, 88) : na, title = "New York noon")
 
 var box   bxSL    = na
 var box   bxTP    = na
@@ -456,8 +540,8 @@ if showDash and barstate.islast
     okEntry = trigBull or trigBear
     fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) : "")
     fStr := fStr == "" ? "soft (none)" : fStr
-    verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : "WAIT"
-    verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : color.new(color.gray, 30)
+    verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? (pendDir == 1 ? "⌛ wait retest ▲" : "⌛ wait retest ▼") : "WAIT"
+    verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)
     table.cell(dash, 0, 0, "APEX SESSION SMC (adaptive)", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
     table.merge_cells(dash, 0, 0, 1, 0)
     table.cell(dash, 0, 1, "Session", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
