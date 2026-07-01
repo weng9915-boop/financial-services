@@ -21,7 +21,7 @@
 // =============================================================================
 
 indicator("Apex Session SMC [XAUUSD]", "ApexSMC", overlay = true,
-     max_boxes_count = 60, max_lines_count = 200, max_labels_count = 200, max_bars_back = 500)
+     max_boxes_count = 100, max_lines_count = 200, max_labels_count = 200, max_bars_back = 500)
 
 // ============================== HELPERS ======================================
 f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
@@ -152,7 +152,10 @@ candleColorMode = input.string("HTF Trend", "Color candles by", options = ["HTF 
 htfColorTF = input.timeframe("60", "  HTF for candle color", group = gD)
 volColorMult = input.float(1.5, "  Volume Pressure: min rel-volume ×", minval = 0.5, step = 0.1, group = gD)
 showOB     = input.bool(true, "Draw order blocks (auto-delete on invalidation)", group = gD)
+obMaxKeep  = input.int(15, "  Max order blocks kept on chart", minval = 3, maxval = 25, group = gD, tooltip = "OB has its OWN budget, separate from FVG — a burst of FVGs can no longer push order blocks off the chart.")
 showFVG    = input.bool(true, "Draw fair value gaps (auto-delete on fill)", group = gD)
+fvgMinAtr  = input.float(0.15, "  Min FVG gap size × ATR", minval = 0, step = 0.05, group = gD, tooltip = "On 1m gold, tiny 3-candle imbalances form constantly and stack up into an unreadable pile of boxes. This requires the gap to be at least this fraction of ATR before it's drawn — raise it to only show meaningful FVGs.")
+fvgMaxKeep = input.int(8, "  Max FVGs kept on chart", minval = 2, maxval = 15, group = gD, tooltip = "FVGs form far more often than order blocks, so a smaller, separate cap keeps only the most recent/relevant ones instead of a stack of overlapping boxes.")
 zoneMaxAge = input.int(120, "  Zone max age (bars)", minval = 10, group = gD)
 showSessHL = input.bool(true, "Show last Asia / London / NY high-low", group = gD)
 pressLen   = input.int(20, "Pressure look-back (up vs down displacement)", minval = 2, group = gD, tooltip = "Sums the size of up-moves vs down-moves over N bars. If sellers pushed 6 while buyers pushed 3, net pressure is DOWN — the read you described. Shown on the dashboard; add it as a filter in Extra confirmations.")
@@ -391,8 +394,8 @@ dispUp = close - open > atr
 dispDn = open - close > atr
 obBull = dispUp and close[1] < open[1]   // last down candle before an up impulse = demand
 obBear = dispDn and close[1] > open[1]   // last up candle before a down impulse = supply
-fvgBull = low > high[2]                   // 3-candle imbalance up
-fvgBear = high < low[2]                   // 3-candle imbalance down
+fvgBull = low > high[2] and (low - high[2]) >= fvgMinAtr * atr   // 3-candle imbalance up, meaningful size only
+fvgBear = high < low[2] and (low[2] - high) >= fvgMinAtr * atr   // 3-candle imbalance down, meaningful size only
 swingLoN = ta.lowest(low,  slSwingLook)   // recent liquidity below (for SL beyond the sweep)
 swingHiN = ta.highest(high, slSwingLook)  // recent liquidity above
 
@@ -818,41 +821,61 @@ if drawSess
         box.set_bottom(bigNyBox, math.min(box.get_bottom(bigNyBox), low))
         box.set_right(bigNyBox, bar_index)
 
-// ----- order blocks & FVGs: FILLED + clearly labeled, auto-delete when invalidated ---
+// ----- order blocks & FVGs: SEPARATE budgets so FVG proliferation can't evict OB
 // Color language is consistent everywhere: green = demand/bullish, red = supply/bearish.
-// Solid border = Order Block, dashed border = Fair Value Gap — text spells out which.
-var array<box> demZones = array.new<box>()
-var array<box> supZones = array.new<box>()
+// Order blocks are rare and valuable -> their own array, own cap (obMaxKeep).
+// FVGs form far more often on 1m gold -> their own smaller array (fvgMaxKeep) +
+// a minimum-size filter (fvgMinAtr) so trivial gaps don't stack into a pile.
+var array<box> demOBZones  = array.new<box>()
+var array<box> supOBZones  = array.new<box>()
+var array<box> demFVGZones = array.new<box>()
+var array<box> supFVGZones = array.new<box>()
 if showOB and obBull
-    if demZones.size() >= 20
-        box.delete(demZones.shift())
-    demZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 70), border_width = 1, border_style = line.style_solid, text = "OB DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    if demOBZones.size() >= obMaxKeep
+        box.delete(demOBZones.shift())
+    demOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 70), border_width = 1, border_style = line.style_solid, text = "OB DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if showOB and obBear
-    if supZones.size() >= 20
-        box.delete(supZones.shift())
-    supZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 70), border_width = 1, border_style = line.style_solid, text = "OB SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    if supOBZones.size() >= obMaxKeep
+        box.delete(supOBZones.shift())
+    supOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 70), border_width = 1, border_style = line.style_solid, text = "OB SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBull
-    if demZones.size() >= 20
-        box.delete(demZones.shift())
-    demZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 78), border_width = 1, border_style = line.style_solid, text = "FVG DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    if demFVGZones.size() >= fvgMaxKeep
+        box.delete(demFVGZones.shift())
+    demFVGZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 78), border_width = 1, border_style = line.style_solid, text = "FVG DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBear
-    if supZones.size() >= 20
-        box.delete(supZones.shift())
-    supZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 78), border_width = 1, border_style = line.style_solid, text = "FVG SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
-if demZones.size() > 0
-    for i = demZones.size() - 1 to 0
-        box bd = demZones.get(i)
+    if supFVGZones.size() >= fvgMaxKeep
+        box.delete(supFVGZones.shift())
+    supFVGZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 78), border_width = 1, border_style = line.style_solid, text = "FVG SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+if demOBZones.size() > 0
+    for i = demOBZones.size() - 1 to 0
+        box bd = demOBZones.get(i)
         if close < box.get_bottom(bd) or bar_index - box.get_left(bd) > zoneMaxAge
             box.delete(bd)
-            demZones.remove(i)
+            demOBZones.remove(i)
         else
             box.set_right(bd, bar_index + 2)
-if supZones.size() > 0
-    for i = supZones.size() - 1 to 0
-        box bs = supZones.get(i)
+if supOBZones.size() > 0
+    for i = supOBZones.size() - 1 to 0
+        box bs = supOBZones.get(i)
         if close > box.get_top(bs) or bar_index - box.get_left(bs) > zoneMaxAge
             box.delete(bs)
-            supZones.remove(i)
+            supOBZones.remove(i)
+        else
+            box.set_right(bs, bar_index + 2)
+if demFVGZones.size() > 0
+    for i = demFVGZones.size() - 1 to 0
+        box bd = demFVGZones.get(i)
+        if close < box.get_bottom(bd) or bar_index - box.get_left(bd) > zoneMaxAge
+            box.delete(bd)
+            demFVGZones.remove(i)
+        else
+            box.set_right(bd, bar_index + 2)
+if supFVGZones.size() > 0
+    for i = supFVGZones.size() - 1 to 0
+        box bs = supFVGZones.get(i)
+        if close > box.get_top(bs) or bar_index - box.get_left(bs) > zoneMaxAge
+            box.delete(bs)
+            supFVGZones.remove(i)
         else
             box.set_right(bs, bar_index + 2)
 

@@ -42,8 +42,13 @@ background name box sized to that session's own running high/low** (Pine's text
 size tops out at a fixed "huge," but the box itself literally grows/shrinks with
 the session); the **last Asia / London / NY high-low** (the liquidity pools) each
 with a **small name tag** at the right edge — nothing to guess; and **order blocks
-+ FVGs drawn as filled, labeled boxes** ("OB DEMAND" / "OB SUPPLY" / "FVG") that
-**auto-delete** when price invalidates them. A **liquidity-direction projection**
++ FVGs drawn as filled, labeled boxes** ("OB DEMAND" / "OB SUPPLY" / "FVG DEMAND" /
+"FVG SUPPLY") that **auto-delete** when price invalidates them. OB and FVG each
+have their **own separate budget** (`obMaxKeep` / `fvgMaxKeep`) — on fast
+timeframes FVGs form far more often than order blocks, and sharing one budget let
+FVGs silently evict OB boxes that hadn't actually invalidated. FVG also has a
+**minimum gap size filter** (`fvgMinAtr`) so trivial 1m imbalances don't stack
+into an unreadable pile. A **liquidity-direction projection**
 (dotted line + 🎯 target tag) is drawn the moment a sweep arms, pointing at the
 nearest opposing pool — *where the liquidity is, and where price wants to go after
 it*. **Market structure** — BOS (continuation), CHoCH (reversal), and MSS (minor/
