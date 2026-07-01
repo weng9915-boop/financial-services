@@ -77,6 +77,19 @@ down-displacement — "sellers pushed 6, buyers pushed 3 → down"), usable as a
 optional filter. **SL can sit beyond the recent swing** so a liquidity sweep of
 your stop level doesn't wick you out before the move.
 
+> **`ApexSessionSMC_Strategy.pine`** — the **Strategy-Tester** version. Same
+> sessions/phases/sweep/retest/filters/execution (incl. the trailing runner and
+> news-momentum entry), wired to `strategy.entry`/`strategy.exit`/`strategy.close`
+> with **risk-% position sizing** instead of the indicator's homemade R-multiple
+> counters — real fills, real equity curve, real max drawdown, no broker/account
+> connection needed (Strategy Tester is pure historical simulation). Deliberately
+> **drops** the purely informational layers (BOS/CHoCH/MSS, zigzag, Premium/
+> Discount, HH/HL/LL/LH, CISD, OB/FVG boxes, big session watermarks) since none of
+> them affect entries and TradingView already draws trade markers natively for
+> strategy scripts — keeps the file focused on the part that determines the
+> numbers. Set Commission + Slippage in **Properties** to your broker's real
+> figures, or the backtest is fiction.
+
 **Optional news-momentum entry** (off by default): a *separate*, minimally-gated
 path — inside a configurable news window, a big confirmed displacement candle is
 taken on its own, no sweep or retest required. Explicitly higher-risk/lower-average

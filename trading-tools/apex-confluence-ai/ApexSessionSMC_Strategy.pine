@@ -1,0 +1,605 @@
+//@version=6
+// =============================================================================
+//  APEX SESSION SMC — STRATEGY  (XAUUSD)  —  same model, real backtest engine
+// -----------------------------------------------------------------------------
+//  Same entry/exit logic as ApexSessionSMC.pine, wired to TradingView's actual
+//  Strategy Tester: real fills, real commission/slippage (set in Properties),
+//  risk-% position sizing, equity curve, max drawdown, full trade list — no
+//  broker/account connection needed, this is pure historical simulation.
+//
+//  SCOPE vs the indicator: everything that decides an entry/exit is ported
+//  faithfully — sessions, adaptive phase detection, liquidity sweep + retest,
+//  all optional filters (bias/momentum/CHoCH/SMT/strong-S-R/net-pressure),
+//  news-momentum entry, stop/target modes incl. the trailing runner, cooldown,
+//  fail-exit, time-stop. DROPPED on purpose: BOS/CHoCH/MSS lines, the price-
+//  action zigzag, Premium/Discount/Equilibrium, HH/HL/LL/LH tags, CISD, OB/FVG
+//  zone boxes, the big session-name watermarks. None of those touch entries —
+//  they're informational-only in the indicator — and TradingView already draws
+//  entry/exit/fill markers natively for strategy scripts, so keeping this file
+//  focused makes it far easier to verify the part that actually matters: the
+//  execution. Ask if you want any specific one of those ported over too.
+//
+//  Non-repaint on bar close. Tick volume on most gold feeds. Not financial advice.
+// =============================================================================
+
+strategy("Apex Session SMC [XAUUSD] - Strategy", "ApexSMC-Str", overlay = true,
+     initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.fixed, default_qty_value = 1,
+     commission_type = strategy.commission.percent, commission_value = 0.02, slippage = 2,
+     max_boxes_count = 20, max_lines_count = 20, max_labels_count = 50, max_bars_back = 500)
+
+// ============================== HELPERS ======================================
+f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
+f_swHi(float p) => not na(p) and close[1] <= p and high > p and close < p   // was below, raided above, reclaimed
+f_phase(float o, float h, float l, float c, float pHi, float pLo, float refR, float expMult, float dirMin) =>
+    float rng = h - l
+    bool swHi = not na(pHi) and h > pHi and c < pHi
+    bool swLo = not na(pLo) and l < pLo and c > pLo
+    bool manip = swHi or swLo
+    bool directional = rng > 0 and math.abs(c - o) > dirMin * rng
+    bool big = na(refR) or rng > expMult * refR
+    string ph = manip ? "Manip" : (big and directional) ? "Distrib" : "Accum"
+    int dr = swHi ? -1 : swLo ? 1 : (c > o ? 1 : -1)
+    [ph, dr]
+f_chk(bool b) => b ? "✓" : "✗"
+f_touches(float lvl, float tol, int look) =>
+    int c = 0
+    if not na(lvl)
+        for i = 0 to look - 1
+            if math.abs(high[i] - lvl) <= tol or math.abs(low[i] - lvl) <= tol
+                c := c + 1
+    c
+
+// ============================== ① SESSIONS ===================================
+gS = "① Sessions (UTC — adjust to your feed)"
+asiaSess  = input.session("2300-0700", "Asia window", group = gS)
+lonSess   = input.session("0700-1200", "London window", group = gS)
+nySess    = input.session("1200-2100", "New York window", group = gS)
+sessMode  = input.string("Any", "Trade in", options = ["Any","Kill zones only"], group = gS, tooltip = "Any = trade whichever session is manipulating. Kill zones = London + NY only.")
+
+// ============================== ② PHASE DETECTION ============================
+gF = "② Phase detection"
+expandMult = input.float(1.2, "Distribution range ≥ avg ×", minval = 1.0, step = 0.1, group = gF)
+dirThresh  = input.float(0.6, "Directional body ≥ range ×", minval = 0.1, maxval = 1.0, step = 0.05, group = gF)
+
+// ============================== ③ ENTRY ======================================
+gE = "③ Entry — confirm → retest → close"
+usePoolSess = input.bool(true, "Pool: last completed session H/L", group = gE)
+usePoolPD   = input.bool(true, "Pool: prev day H/L", group = gE)
+usePoolPW   = input.bool(true, "Pool: prev week H/L", group = gE)
+usePoolAsia = input.bool(true, "Pool: today's Asia H/L", group = gE)
+useCandle   = input.bool(true, "Require a confirming candlestick", group = gE)
+wickMult    = input.float(2.0, "  Pin wick ≥ body ×", minval = 0.5, step = 0.1, group = gE)
+requireBias = input.bool(false, "Filter: HTF trend must agree", group = gE)
+biasTF      = input.timeframe("60", "  HTF timeframe", group = gE)
+requireMom  = input.bool(false, "Filter: momentum must agree", group = gE)
+momTool     = input.string("Stochastic", "  Momentum tool", options = ["Stochastic","CCI"], group = gE)
+requireChoch= input.bool(false, "Filter: CHoCH must confirm", group = gE)
+pivLen      = input.int(3, "  CHoCH swing sensitivity", minval = 1, group = gE)
+entryMode  = input.string("Retest zone (plan)", "Entry style", options = ["Retest zone (plan)","Sweep + candle (instant)"], group = gE)
+retestBars = input.int(20, "  Retest valid for (bars)", minval = 1, group = gE)
+retestTol  = input.float(0.5, "  Retest tolerance × ATR", minval = 0.05, step = 0.05, group = gE)
+
+// ============================== EXTRA CONFIRMATIONS (optional) ===============
+gX = "Extra confirmations (optional)"
+requireSMT = input.bool(false, "Require SMT divergence", group = gX)
+smtSym  = input.symbol("OANDA:XAGUSD", "  Correlated symbol", group = gX)
+smtCorr = input.string("Positive", "  Correlation to gold", options = ["Positive","Inverse"], group = gX)
+smtLen  = input.int(10, "  SMT swing lookback", minval = 2, group = gX)
+useStrongSR = input.bool(false, "Require strong (tested) level", group = gX)
+srTouches = input.int(2, "  Min touches", minval = 1, group = gX)
+srLook    = input.int(50, "  Touch lookback (bars)", minval = 5, maxval = 480, group = gX)
+srTol     = input.float(0.4, "  Touch tolerance × ATR", minval = 0.05, step = 0.05, group = gX)
+requirePress = input.bool(false, "Require net pressure agrees", group = gX)
+
+// ============================== ④ EXECUTION ==================================
+gR = "④ Execution — locked levels"
+atrLen   = input.int(14, "ATR length", minval = 1, group = gR)
+stopMode = input.string("Beyond key level", "Stop placement", options = ["Beyond key level","Beyond sweep + ATR","Fixed $"], group = gR)
+slDist   = input.float(10.0, "  Fixed $ stop distance", minval = 0.1, step = 0.5, group = gR)
+slBuf    = input.float(0.3, "  Sweep buffer × ATR", minval = 0, step = 0.1, group = gR)
+minStopAtr = input.float(0.8, "  Min stop × ATR (no micro-stops)", minval = 0, step = 0.1, group = gR)
+slBeyondSwing = input.bool(true, "  SL beyond recent swing (survive the sweep)", group = gR)
+slSwingLook = input.int(10, "    Swing look-back (bars)", minval = 2, group = gR)
+tgtMode  = input.string("Next key level", "Target mode", options = ["Next key level","Trail runner","Furthest pool","Fixed RR"], group = gR)
+rr       = input.float(5.0, "Reward : Risk (Fixed RR mode)", minval = 0.5, step = 0.5, group = gR)
+beR      = input.float(1.0, "  Runner: breakeven at +R", minval = 0.1, step = 0.1, group = gR)
+trailAtr = input.float(2.0, "  Runner: trail × ATR", minval = 0.1, step = 0.1, group = gR)
+maxRRcap = input.float(20.0, "  Runner: max RR cap", minval = 1, step = 1, group = gR)
+cooldownBars = input.int(10, "Cooldown after a trade (bars)", minval = 0, group = gR)
+useFailExit  = input.bool(true, "Cut on opposite sweep", group = gR)
+useTimeStop  = input.bool(true, "Time stop", group = gR)
+maxBars      = input.int(40, "  Max bars in trade", minval = 1, group = gR)
+
+// ============================== ⑤ NEWS-MOMENTUM ENTRY (optional, higher risk) =
+gN = "⑤ News-momentum entry (optional, higher risk)"
+useNewsEntry = input.bool(false, "Enable: ride a big confirmed move during news", group = gN)
+newsWin1 = input.session("1230-1330", "  News window 1 (e.g. US data)", group = gN)
+newsWin2 = input.session("1800-1900", "  News window 2 (e.g. FOMC)", group = gN)
+newsDispMult = input.float(1.5, "  Min displacement × ATR", minval = 0.5, step = 0.1, group = gN)
+
+// ============================== ⑥ DISPLAY ====================================
+gD = "⑥ Display"
+showDash = input.bool(true, "Show dashboard", group = gD)
+dashPos  = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
+drawLevels = input.bool(true, "Draw key levels / pools", group = gD)
+showSessHL = input.bool(true, "Show last Asia / London / NY high-low", group = gD)
+pressLen   = input.int(20, "Pressure look-back (up vs down displacement)", minval = 2, group = gD)
+
+// ============================== ⑦ SESSION SHADING ===========================
+gV = "⑦ Session shading (UTC)"
+drawSess = input.bool(true, "Shade sessions on chart", group = gV)
+asiaAM = input.session("2300-0300", "Asia morning", group = gV)
+asiaPM = input.session("0300-0700", "Asia noon", group = gV)
+lonAM  = input.session("0700-0930", "London morning", group = gV)
+lonPM  = input.session("0930-1200", "London noon", group = gV)
+nyAM   = input.session("1200-1500", "New York morning", group = gV)
+nyPM   = input.session("1500-2100", "New York noon", group = gV)
+blankLunch = input.bool(true, "Blank the lunch hour (no shading)", group = gV)
+asiaLunch = input.session("0300-0400", "  Asia lunch", group = gV)
+lonLunch  = input.session("1000-1100", "  London lunch", group = gV)
+nyLunch   = input.session("1600-1700", "  New York lunch", group = gV)
+
+// ============================== ⑧ RISK & POSITION SIZING (Strategy only) =====
+gP = "⑧ Risk & position sizing"
+riskPct = input.float(1.0, "Risk per trade (% of equity)", minval = 0.05, maxval = 10, step = 0.05, group = gP, tooltip = "Position size = (current equity × risk%) / stop distance. Real risk-based sizing for the backtest — set Commission + Slippage in Properties to your broker's real numbers, or the results are fiction.")
+
+// ============================== CALCULATIONS =================================
+atr = ta.atr(atrLen)
+
+pdh = request.security(syminfo.tickerid, "D", high[1],  lookahead = barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],   lookahead = barmerge.lookahead_on)
+pwh = request.security(syminfo.tickerid, "W", high[1],  lookahead = barmerge.lookahead_on)
+pwl = request.security(syminfo.tickerid, "W", low[1],   lookahead = barmerge.lookahead_on)
+
+htfClose = request.security(syminfo.tickerid, biasTF, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, biasTF, ta.ema(close, 50)[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
+biasBull = htfClose > htfEma
+biasBear = htfClose < htfEma
+
+stochK = ta.sma(ta.stoch(close, high, low, 14), 3)
+stochD = ta.sma(stochK, 3)
+cciV   = ta.cci(close, 20)
+momBull = momTool == "CCI" ? cciV > -100 : stochK > stochD
+momBear = momTool == "CCI" ? cciV <  100 : stochK < stochD
+
+ph_ = ta.pivothigh(pivLen, pivLen)
+pl_ = ta.pivotlow(pivLen, pivLen)
+var float lastPH = na
+var float lastPL = na
+if not na(ph_)
+    lastPH := ph_
+if not na(pl_)
+    lastPL := pl_
+chochUp = not na(lastPH) and ta.crossover(close, lastPH)
+chochDn = not na(lastPL) and ta.crossunder(close, lastPL)
+var int chochUpBar = na
+var int chochDnBar = na
+if chochUp
+    chochUpBar := bar_index
+if chochDn
+    chochDnBar := bar_index
+chochArmBull = not na(chochUpBar) and bar_index - chochUpBar <= 20
+chochArmBear = not na(chochDnBar) and bar_index - chochDnBar <= 20
+
+// ----- sessions: in/out + per-session OHLC for the day -----------------------
+inAsia = not na(time(timeframe.period, asiaSess, "GMT+0"))
+inLon  = not na(time(timeframe.period, lonSess,  "GMT+0"))
+inNY   = not na(time(timeframe.period, nySess,   "GMT+0"))
+inSession = inAsia or inLon or inNY
+inKZ      = inLon or inNY
+inSessionOK = sessMode == "Kill zones only" ? inKZ : true
+
+newDay = timeframe.change("D")
+
+var float asiaO = na
+var float asiaH = na
+var float asiaL = na
+var float asiaC = na
+if inAsia and not inAsia[1]
+    asiaO := open
+    asiaH := high
+    asiaL := low
+    asiaC := close
+else if inAsia
+    asiaH := math.max(asiaH, high)
+    asiaL := math.min(asiaL, low)
+    asiaC := close
+
+var float lonO = na
+var float lonH = na
+var float lonL = na
+var float lonC = na
+if inLon and not inLon[1]
+    lonO := open
+    lonH := high
+    lonL := low
+    lonC := close
+else if inLon
+    lonH := math.max(lonH, high)
+    lonL := math.min(lonL, low)
+    lonC := close
+
+var float nyO = na
+var float nyH = na
+var float nyL = na
+var float nyC = na
+if inNY and not inNY[1]
+    nyO := open
+    nyH := high
+    nyL := low
+    nyC := close
+else if inNY
+    nyH := math.max(nyH, high)
+    nyL := math.min(nyL, low)
+    nyC := close
+
+var float lastSessHi = na
+var float lastSessLo = na
+var string lastSessName = "—"
+var string lastSessPhase = "—"
+var int lastSessDir = 0
+var float refAsia = na
+var float refLon  = na
+var float refNY   = na
+var string asiaPhase = "—"
+var string lonPhase  = "—"
+var string nyPhase   = "—"
+var int aA = 0
+var int aM = 0
+var int aD = 0
+var int lA = 0
+var int lM = 0
+var int lD = 0
+var int nA = 0
+var int nM = 0
+var int nD = 0
+
+if newDay
+    asiaPhase := "—"
+    lonPhase := "—"
+    nyPhase := "—"
+
+endAsia = not inAsia and inAsia[1]
+endLon  = not inLon  and inLon[1]
+endNY   = not inNY   and inNY[1]
+
+if endAsia
+    [phA, drA] = f_phase(asiaO, asiaH, asiaL, asiaC, lastSessHi, lastSessLo, refAsia, expandMult, dirThresh)
+    asiaPhase := phA
+    aA := aA + (phA == "Accum" ? 1 : 0)
+    aM := aM + (phA == "Manip" ? 1 : 0)
+    aD := aD + (phA == "Distrib" ? 1 : 0)
+    lastSessHi := asiaH
+    lastSessLo := asiaL
+    lastSessName := "Asia"
+    lastSessPhase := phA
+    lastSessDir := drA
+    refAsia := na(refAsia) ? asiaH - asiaL : refAsia * 0.8 + (asiaH - asiaL) * 0.2
+if endLon
+    [phL, drL] = f_phase(lonO, lonH, lonL, lonC, lastSessHi, lastSessLo, refLon, expandMult, dirThresh)
+    lonPhase := phL
+    lA := lA + (phL == "Accum" ? 1 : 0)
+    lM := lM + (phL == "Manip" ? 1 : 0)
+    lD := lD + (phL == "Distrib" ? 1 : 0)
+    lastSessHi := lonH
+    lastSessLo := lonL
+    lastSessName := "London"
+    lastSessPhase := phL
+    lastSessDir := drL
+    refLon := na(refLon) ? lonH - lonL : refLon * 0.8 + (lonH - lonL) * 0.2
+if endNY
+    [phN, drN] = f_phase(nyO, nyH, nyL, nyC, lastSessHi, lastSessLo, refNY, expandMult, dirThresh)
+    nyPhase := phN
+    nA := nA + (phN == "Accum" ? 1 : 0)
+    nM := nM + (phN == "Manip" ? 1 : 0)
+    nD := nD + (phN == "Distrib" ? 1 : 0)
+    lastSessHi := nyH
+    lastSessLo := nyL
+    lastSessName := "NewYork"
+    lastSessPhase := phN
+    lastSessDir := drN
+    refNY := na(refNY) ? nyH - nyL : refNY * 0.8 + (nyH - nyL) * 0.2
+
+expectTxt = lastSessPhase == "Accum" ? "SWEEP likely (manip)" : lastSessPhase == "Manip" ? "DISTRIB " + (lastSessDir == 1 ? "▲ up" : "▼ down") : lastSessPhase == "Distrib" ? "pullback / accum" : "—"
+
+// ----- candlestick trigger ---------------------------------------------------
+bodyC = math.abs(close - open)
+rngC  = high - low
+upWk  = high - math.max(close, open)
+dnWk  = math.min(close, open) - low
+isDoji  = rngC > 0 and bodyC <= 0.1 * rngC
+bullEng = close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
+bearEng = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
+bullPin = rngC > 0 and dnWk >= wickMult * bodyC and (high - close) <= 0.45 * rngC
+bearPin = rngC > 0 and upWk >= wickMult * bodyC and (close - low) <= 0.45 * rngC
+bullMar = close > open and bodyC >= 1.0 * atr
+bearMar = open > close and bodyC >= 1.0 * atr
+bullConf = (bullEng or bullPin or bullMar) and not isDoji
+bearConf = (bearEng or bearPin or bearMar) and not isDoji
+cndName = isDoji ? "doji" : (bullEng or bearEng) ? "engulf" : (bullPin or bearPin) ? "pin" : (bullMar or bearMar) ? "strong" : "—"
+
+// ----- net displacement pressure ----------------------------------------------
+upDisp   = math.max(close - open, 0)
+dnDisp   = math.max(open - close, 0)
+netPress = math.sum(upDisp, pressLen) - math.sum(dnDisp, pressLen)
+pressBull = netPress > 0
+pressBear = netPress < 0
+
+// ----- news-momentum entry: a big, confirmed displacement inside a news window
+inNewsWindow = not na(time(timeframe.period, newsWin1, "GMT+0")) or not na(time(timeframe.period, newsWin2, "GMT+0"))
+newsBigBull = useNewsEntry and inNewsWindow and close > open and bodyC >= newsDispMult * atr and bullConf
+newsBigBear = useNewsEntry and inNewsWindow and close < open and bodyC >= newsDispMult * atr and bearConf
+
+swingLoN = ta.lowest(low,  slSwingLook)
+swingHiN = ta.highest(high, slSwingLook)
+
+// ----- liquidity sweep (the manipulation, in real time) ----------------------
+sweepLoNow = (usePoolSess and f_swLo(lastSessLo)) or (usePoolPD and f_swLo(pdl)) or (usePoolPW and f_swLo(pwl)) or (usePoolAsia and f_swLo(asiaL))
+sweepHiNow = (usePoolSess and f_swHi(lastSessHi)) or (usePoolPD and f_swHi(pdh)) or (usePoolPW and f_swHi(pwh)) or (usePoolAsia and f_swHi(asiaH))
+swLoName = (usePoolSess and f_swLo(lastSessLo)) ? lastSessName + "·L" : (usePoolPD and f_swLo(pdl)) ? "PDL" : (usePoolPW and f_swLo(pwl)) ? "PWL" : (usePoolAsia and f_swLo(asiaL)) ? "Asia·L" : "—"
+swHiName = (usePoolSess and f_swHi(lastSessHi)) ? lastSessName + "·H" : (usePoolPD and f_swHi(pdh)) ? "PDH" : (usePoolPW and f_swHi(pwh)) ? "PWH" : (usePoolAsia and f_swHi(asiaH)) ? "Asia·H" : "—"
+
+// ----- SMT divergence ----------------------------------------------------------
+smtRefLow  = request.security(smtSym, timeframe.period, low,  lookahead = barmerge.lookahead_off)
+smtRefHigh = request.security(smtSym, timeframe.period, high, lookahead = barmerge.lookahead_off)
+gLL = low  < ta.lowest(low,  smtLen)[1]
+gHH = high > ta.highest(high, smtLen)[1]
+rLL = smtRefLow  < ta.lowest(smtRefLow,  smtLen)[1]
+rHH = smtRefHigh > ta.highest(smtRefHigh, smtLen)[1]
+smtBull = smtCorr == "Positive" ? (gLL and not rLL) : (gLL and not rHH)
+smtBear = smtCorr == "Positive" ? (gHH and not rHH) : (gHH and not rLL)
+
+strongLo = f_touches(usePoolSess and f_swLo(lastSessLo) ? lastSessLo : usePoolPD and f_swLo(pdl) ? pdl : usePoolPW and f_swLo(pwl) ? pwl : usePoolAsia and f_swLo(asiaL) ? asiaL : na, srTol * atr, srLook) >= srTouches
+strongHi = f_touches(usePoolSess and f_swHi(lastSessHi) ? lastSessHi : usePoolPD and f_swHi(pdh) ? pdh : usePoolPW and f_swHi(pwh) ? pwh : usePoolAsia and f_swHi(asiaH) ? asiaH : na, srTol * atr, srLook) >= srTouches
+
+// ============================== SIGNAL STATE MACHINE (arm -> retest -> trigger)
+var int   pendDir  = 0
+var float zLvl     = na
+var int   pendBar  = na
+var int   lastExitBar = na
+
+cooled = na(lastExitBar) or bar_index - lastExitBar >= cooldownBars
+
+swpLoPrice = (usePoolSess and f_swLo(lastSessLo)) ? lastSessLo : (usePoolPD and f_swLo(pdl)) ? pdl : (usePoolPW and f_swLo(pwl)) ? pwl : (usePoolAsia and f_swLo(asiaL)) ? asiaL : na
+swpHiPrice = (usePoolSess and f_swHi(lastSessHi)) ? lastSessHi : (usePoolPD and f_swHi(pdh)) ? pdh : (usePoolPW and f_swHi(pwh)) ? pwh : (usePoolAsia and f_swHi(asiaH)) ? asiaH : na
+armBullNow = sweepLoNow and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo) and (not requirePress or pressBull)
+armBearNow = sweepHiNow and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi) and (not requirePress or pressBear)
+if armBullNow
+    pendDir := 1
+    zLvl := swpLoPrice
+    pendBar := bar_index
+if armBearNow
+    pendDir := -1
+    zLvl := swpHiPrice
+    pendBar := bar_index
+if pendDir == 1 and (close < zLvl - retestTol * atr or bar_index - pendBar > retestBars)
+    pendDir := 0
+if pendDir == -1 and (close > zLvl + retestTol * atr or bar_index - pendBar > retestBars)
+    pendDir := 0
+retestBull = pendDir == 1 and bar_index > pendBar and low  <= zLvl + retestTol * atr and (not useCandle or bullConf)
+retestBear = pendDir == -1 and bar_index > pendBar and high >= zLvl - retestTol * atr and (not useCandle or bearConf)
+
+trigBull = entryMode == "Retest zone (plan)" ? retestBull : (sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo) and (not requirePress or pressBull))
+trigBear = entryMode == "Retest zone (plan)" ? retestBear : (sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi) and (not requirePress or pressBear))
+newsTrigBull = newsBigBull
+newsTrigBear = newsBigBear
+
+// ============================== STRATEGY EXECUTION ============================
+var int   dir      = 0
+var float entryP   = na
+var float slP      = na
+var float tpP      = na
+var float riskDist = na
+var float tradeRR  = na
+var int   entryBar = na
+var float peakP    = na
+var bool  beDone   = false
+
+longSig   = false
+shortSig  = false
+exitEarly = false
+
+if barstate.isconfirmed
+    // ----- manage an open position: trail runner, discretionary early exits ---
+    if strategy.position_size != 0
+        dir := strategy.position_size > 0 ? 1 : -1
+        if tgtMode == "Trail runner"
+            peakP := dir == 1 ? math.max(peakP, high) : math.min(peakP, low)
+            if not beDone and dir * (close - entryP) >= beR * riskDist
+                slP := dir == 1 ? math.max(slP, entryP) : math.min(slP, entryP)
+                beDone := true
+            if beDone
+                float cand = dir == 1 ? peakP - trailAtr * atr : peakP + trailAtr * atr
+                slP := dir == 1 ? math.max(slP, cand) : math.min(slP, cand)
+        bool earlyExitNow = false
+        if useFailExit and (dir == 1 ? sweepHiNow : sweepLoNow)
+            earlyExitNow := true
+            exitEarly := true
+        else if useTimeStop and tgtMode != "Trail runner" and bar_index - entryBar >= maxBars
+            earlyExitNow := true
+            exitEarly := true
+        if earlyExitNow
+            strategy.close(dir == 1 ? "Long" : "Short", comment = "Early exit")
+        else if dir == 1
+            strategy.exit("XLong", "Long", stop = slP, limit = tpP)
+        else
+            strategy.exit("XShort", "Short", stop = slP, limit = tpP)
+
+    // ----- cooldown bookkeeping: detect the bar a position just went flat -----
+    if strategy.position_size == 0 and strategy.position_size[1] != 0
+        lastExitBar := bar_index
+        dir := 0
+
+    // ----- entries -------------------------------------------------------------
+    if strategy.position_size == 0 and cooled and (trigBull or trigBear or newsTrigBull or newsTrigBear)
+        dir := (trigBull or newsTrigBull) ? 1 : -1
+        entryP := close
+        float zLvlEff = (trigBull or trigBear) ? zLvl : na
+        float protLvl = dir == 1 ? (not na(zLvlEff) ? math.min(zLvlEff, low) : low) : (not na(zLvlEff) ? math.max(zLvlEff, high) : high)
+        float protSwing = dir == 1 ? swingLoN : swingHiN
+        float prot = not slBeyondSwing ? protLvl : (dir == 1 ? math.min(protLvl, protSwing) : math.max(protLvl, protSwing))
+        float rawSL = stopMode == "Fixed $" ? (dir == 1 ? entryP - slDist : entryP + slDist) : stopMode == "Beyond key level" ? (dir == 1 ? prot - slBuf * atr : prot + slBuf * atr) : (dir == 1 ? math.min(low, prot) - slBuf * atr : math.max(high, prot) + slBuf * atr)
+        float floorSL = dir == 1 ? entryP - minStopAtr * atr : entryP + minStopAtr * atr
+        rawSL := dir == 1 ? math.min(rawSL, floorSL) : math.max(rawSL, floorSL)
+        float minR = 0.2 * atr
+        if dir == 1 and rawSL > entryP - minR
+            rawSL := entryP - minR
+        if dir == -1 and rawSL < entryP + minR
+            rawSL := entryP + minR
+        slP := rawSL
+        riskDist := math.abs(entryP - slP)
+        float tp = entryP + dir * rr * riskDist
+        if tgtMode == "Next key level"
+            float t = na
+            if dir == 1
+                if not na(pdh) and pdh > entryP + riskDist
+                    t := pdh
+                if not na(pwh) and pwh > entryP + riskDist and (na(t) or pwh < t)
+                    t := pwh
+                if not na(lastSessHi) and lastSessHi > entryP + riskDist and (na(t) or lastSessHi < t)
+                    t := lastSessHi
+                if not na(asiaH) and asiaH > entryP + riskDist and (na(t) or asiaH < t)
+                    t := asiaH
+            else
+                if not na(pdl) and pdl < entryP - riskDist
+                    t := pdl
+                if not na(pwl) and pwl < entryP - riskDist and (na(t) or pwl > t)
+                    t := pwl
+                if not na(lastSessLo) and lastSessLo < entryP - riskDist and (na(t) or lastSessLo > t)
+                    t := lastSessLo
+                if not na(asiaL) and asiaL < entryP - riskDist and (na(t) or asiaL > t)
+                    t := asiaL
+            tp := not na(t) ? t : entryP + dir * rr * riskDist
+        else if tgtMode == "Furthest pool"
+            float t = na
+            if dir == 1
+                if not na(pdh) and pdh > entryP
+                    t := pdh
+                if not na(pwh) and pwh > entryP and (na(t) or pwh > t)
+                    t := pwh
+                if not na(lastSessHi) and lastSessHi > entryP and (na(t) or lastSessHi > t)
+                    t := lastSessHi
+            else
+                if not na(pdl) and pdl < entryP
+                    t := pdl
+                if not na(pwl) and pwl < entryP and (na(t) or pwl < t)
+                    t := pwl
+                if not na(lastSessLo) and lastSessLo < entryP and (na(t) or lastSessLo < t)
+                    t := lastSessLo
+            tp := (not na(t) and dir * (t - entryP) >= riskDist) ? t : entryP + dir * rr * riskDist
+        else if tgtMode == "Trail runner"
+            tp := entryP + dir * maxRRcap * riskDist
+        tpP := tp
+        tradeRR := riskDist > 0 ? math.abs(tpP - entryP) / riskDist : na
+        entryBar := bar_index
+        peakP := entryP
+        beDone := false
+        longSig := trigBull or newsTrigBull
+        shortSig := trigBear or newsTrigBear
+
+        float riskAmt = strategy.equity * riskPct / 100
+        float qty = riskDist > 0 ? riskAmt / riskDist : 0.0
+        if qty > 0
+            if dir == 1
+                strategy.entry("Long", strategy.long, qty = qty, comment = "Long")
+                strategy.exit("XLong", "Long", stop = slP, limit = tpP)
+            else
+                strategy.entry("Short", strategy.short, qty = qty, comment = "Short")
+                strategy.exit("XShort", "Short", stop = slP, limit = tpP)
+        pendDir := 0
+
+// ============================== DRAWING (trimmed — trade-relevant context only)
+plot(drawLevels and usePoolPD ? pdh : na, "PDH", color.new(color.red, 40),    1, plot.style_linebr)
+plot(drawLevels and usePoolPD ? pdl : na, "PDL", color.new(color.green, 40),  1, plot.style_linebr)
+plot(drawLevels and usePoolPW ? pwh : na, "PWH", color.new(color.orange, 30), 1, plot.style_linebr)
+plot(drawLevels and usePoolPW ? pwl : na, "PWL", color.new(color.orange, 30), 1, plot.style_linebr)
+plot(drawLevels and usePoolSess ? lastSessHi : na, "Last H", color.new(color.gray, 20), 1, plot.style_linebr)
+plot(drawLevels and usePoolSess ? lastSessLo : na, "Last L", color.new(color.gray, 20), 1, plot.style_linebr)
+plot(showSessHL ? asiaH : na, "Asia H",   color.new(color.aqua, 20),   1, plot.style_linebr)
+plot(showSessHL ? asiaL : na, "Asia L",   color.new(color.aqua, 20),   1, plot.style_linebr)
+plot(showSessHL ? lonH  : na, "London H", color.new(color.lime, 20),   1, plot.style_linebr)
+plot(showSessHL ? lonL  : na, "London L", color.new(color.lime, 20),   1, plot.style_linebr)
+plot(showSessHL ? nyH   : na, "NY H",     color.new(color.orange, 20), 1, plot.style_linebr)
+plot(showSessHL ? nyL   : na, "NY L",     color.new(color.orange, 20), 1, plot.style_linebr)
+
+inAsiaAM = not na(time(timeframe.period, asiaAM, "GMT+0"))
+inAsiaPM = not na(time(timeframe.period, asiaPM, "GMT+0"))
+inLonAM  = not na(time(timeframe.period, lonAM,  "GMT+0"))
+inLonPM  = not na(time(timeframe.period, lonPM,  "GMT+0"))
+inNyAM   = not na(time(timeframe.period, nyAM,   "GMT+0"))
+inNyPM   = not na(time(timeframe.period, nyPM,   "GMT+0"))
+inLunch  = blankLunch and (not na(time(timeframe.period, asiaLunch, "GMT+0")) or not na(time(timeframe.period, lonLunch, "GMT+0")) or not na(time(timeframe.period, nyLunch, "GMT+0")))
+bgcolor(drawSess and inAsiaAM and not inLunch ? color.new(color.blue,   93) : na, title = "Asia morning")
+bgcolor(drawSess and inAsiaPM and not inLunch ? color.new(color.blue,   88) : na, title = "Asia noon")
+bgcolor(drawSess and inLonAM  and not inLunch ? color.new(color.green,  93) : na, title = "London morning")
+bgcolor(drawSess and inLonPM  and not inLunch ? color.new(color.green,  88) : na, title = "London noon")
+bgcolor(drawSess and inNyAM   and not inLunch ? color.new(color.orange, 93) : na, title = "New York morning")
+bgcolor(drawSess and inNyPM   and not inLunch ? color.new(color.orange, 88) : na, title = "New York noon")
+
+plotshape(sweepLoNow, "Swept low",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.tiny)
+plotshape(sweepHiNow, "Swept high", shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.tiny)
+
+// ============================== DASHBOARD (real strategy.* stats) ============
+f_pos() => dashPos == "Top Right" ? position.top_right : dashPos == "Top Left" ? position.top_left : dashPos == "Bottom Right" ? position.bottom_right : position.bottom_left
+var table dash = table.new(f_pos(), 2, 19, border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+if showDash and barstate.islast
+    cW = color.white
+    sessTxt = inNY ? "New York" : inLon ? "London" : inAsia ? "Asia" : "—"
+    liveHint = ((sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—") + "  " + (pressBull ? "▲press" : pressBear ? "▼press" : "") + (useNewsEntry and inNewsWindow ? "  📰news" : "")
+    expC = lastSessPhase == "Manip" ? color.new(color.green, 20) : lastSessPhase == "Accum" ? color.new(color.orange, 20) : color.new(color.gray, 30)
+    fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) + " " : "") + (requirePress ? "P" + f_chk(pressBull or pressBear) : "")
+    fStr := fStr == "" ? "soft (none)" : fStr
+    inPos = strategy.position_size != 0
+    verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inPos ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? (pendDir == 1 ? "⌛ wait retest ▲" : "⌛ wait retest ▼") : "WAIT"
+    verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inPos ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)
+    clTr  = strategy.closedtrades
+    winTr = strategy.wintrades
+    winRt = clTr > 0 ? winTr / clTr * 100 : 0.0
+    pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : (strategy.grossprofit > 0 ? 999.0 : 0.0)
+    table.cell(dash, 0, 0, "APEX SESSION SMC — STRATEGY", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
+    table.merge_cells(dash, 0, 0, 1, 0)
+    table.cell(dash, 0, 1, "Session", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 1, sessTxt + " · " + liveHint, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 2, "Phases today", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 2, "A:" + asiaPhase + " L:" + lonPhase + " N:" + nyPhase, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 3, "Last session", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 3, lastSessName + " = " + lastSessPhase, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 4, "EXPECT next", text_color = cW, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 4, expectTxt, text_color = cW, bgcolor = expC, text_size = size.small)
+    table.cell(dash, 0, 5, "— ENTRY —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
+    table.merge_cells(dash, 0, 5, 1, 5)
+    table.cell(dash, 0, 6, "Pool swept", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 6, (sweepLoNow or sweepHiNow ? "✓ " : "✗ ") + (sweepLoNow ? swLoName : sweepHiNow ? swHiName : ""), text_color = (sweepLoNow or sweepHiNow) ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 7, "Candle", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 7, f_chk((bullConf or bearConf) and not isDoji) + " " + cndName, text_color = (bullConf or bearConf) ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 8, "Filters", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 8, fStr, text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 9, "VERDICT", text_color = cW, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 9, verdict, text_color = cW, bgcolor = verdictC, text_size = size.small)
+    table.cell(dash, 0, 10, "Entry", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 10, inPos ? str.tostring(strategy.position_avg_price, "#.##") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 11, "TP / SL", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 11, inPos ? str.tostring(tpP, "#.#") + " / " + str.tostring(slP, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 12, "Qty / RR", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 12, inPos ? str.tostring(math.abs(strategy.position_size), "#.####") + " / 1:" + str.tostring(tradeRR, "#.#") : "—", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 13, "— STRATEGY TESTER —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
+    table.merge_cells(dash, 0, 13, 1, 13)
+    table.cell(dash, 0, 14, "Closed / Win%", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 14, str.tostring(clTr) + " / " + str.tostring(winRt, "#.#") + "%", text_color = cW, text_size = size.small)
+    table.cell(dash, 0, 15, "Profit factor", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 15, str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 16, "Net profit", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 16, str.tostring(strategy.netprofit, "#.##") + " (" + str.tostring(strategy.netprofit / strategy.initial_capital * 100, "#.#") + "%)", text_color = strategy.netprofit >= 0 ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 0, 17, "Max drawdown", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 17, str.tostring(strategy.max_drawdown, "#.##"), text_color = color.red, text_size = size.small)
+    table.cell(dash, 0, 18, "Session roles (A/M/D)", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
+    table.cell(dash, 1, 18, "A " + str.tostring(aA)+"/"+str.tostring(aM)+"/"+str.tostring(aD) + "  L " + str.tostring(lA)+"/"+str.tostring(lM)+"/"+str.tostring(lD) + "  N " + str.tostring(nA)+"/"+str.tostring(nM)+"/"+str.tostring(nD), text_color = cW, text_size = size.small)
+
+// ============================== ALERTS =======================================
+if longSig
+    alert("APEX SMC BUY " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | 1:" + str.tostring(tradeRR, "#.#"), alert.freq_once_per_bar_close)
+if shortSig
+    alert("APEX SMC SELL " + syminfo.ticker + " @ " + str.tostring(entryP, "#.##") + " | SL " + str.tostring(slP, "#.##") + " | TP " + str.tostring(tpP, "#.##") + " | 1:" + str.tostring(tradeRR, "#.#"), alert.freq_once_per_bar_close)
+alertcondition(longSig,  "SMC Long Entry",  "Apex SMC BUY")
+alertcondition(shortSig, "SMC Short Entry", "Apex SMC SELL")
