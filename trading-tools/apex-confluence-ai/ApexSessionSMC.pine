@@ -26,13 +26,13 @@ indicator("Apex Session SMC [XAUUSD]", "ApexSMC", overlay = true,
 // ============================== HELPERS ======================================
 f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
 f_swHi(float p) => not na(p) and close[1] <= p and high > p and close < p   // was below, raided above, reclaimed
-f_phase(float o, float h, float l, float c, float pHi, float pLo, float refR) =>
+f_phase(float o, float h, float l, float c, float pHi, float pLo, float refR, float expMult, float dirMin) =>
     float rng = h - l
     bool swHi = not na(pHi) and h > pHi and c < pHi
     bool swLo = not na(pLo) and l < pLo and c > pLo
     bool manip = swHi or swLo
-    bool directional = rng > 0 and math.abs(c - o) > 0.6 * rng
-    bool big = na(refR) or rng > 1.2 * refR
+    bool directional = rng > 0 and math.abs(c - o) > dirMin * rng
+    bool big = na(refR) or rng > expMult * refR
     string ph = manip ? "Manip" : (big and directional) ? "Distrib" : "Accum"
     int dr = swHi ? -1 : swLo ? 1 : (c > o ? 1 : -1)
     [ph, dr]
@@ -44,6 +44,36 @@ f_touches(float lvl, float tol, int look) =>
             if math.abs(high[i] - lvl) <= tol or math.abs(low[i] - lvl) <= tol
                 c := c + 1
     c
+f_nextPool(int d, float px, float _pdh, float _pdl, float _pwh, float _pwl, float _lastHi, float _lastLo, string _lastNm, float _asiaH, float _asiaL) =>
+    float t = na
+    string nm = "—"
+    if d == 1
+        if not na(_pdh) and _pdh > px
+            t := _pdh
+            nm := "PDH"
+        if not na(_pwh) and _pwh > px and (na(t) or _pwh < t)
+            t := _pwh
+            nm := "PWH"
+        if not na(_lastHi) and _lastHi > px and (na(t) or _lastHi < t)
+            t := _lastHi
+            nm := _lastNm + " H"
+        if not na(_asiaH) and _asiaH > px and (na(t) or _asiaH < t)
+            t := _asiaH
+            nm := "Asia H"
+    else
+        if not na(_pdl) and _pdl < px
+            t := _pdl
+            nm := "PDL"
+        if not na(_pwl) and _pwl < px and (na(t) or _pwl > t)
+            t := _pwl
+            nm := "PWL"
+        if not na(_lastLo) and _lastLo < px and (na(t) or _lastLo > t)
+            t := _lastLo
+            nm := _lastNm + " L"
+        if not na(_asiaL) and _asiaL < px and (na(t) or _asiaL > t)
+            t := _asiaL
+            nm := "Asia L"
+    [t, nm]
 
 // ============================== ① SESSIONS ===================================
 gS = "① Sessions (UTC — adjust to your feed)"
@@ -106,21 +136,29 @@ useFailExit  = input.bool(true, "Cut on opposite sweep", group = gR)
 useTimeStop  = input.bool(true, "Time stop", group = gR)
 maxBars      = input.int(40, "  Max bars in trade", minval = 1, group = gR)
 
-// ============================== ⑤ DISPLAY ====================================
-gD = "⑤ Display"
+// ============================== ⑤ NEWS-MOMENTUM ENTRY (optional, higher risk) =
+gN = "⑤ News-momentum entry (optional, higher risk)"
+useNewsEntry = input.bool(false, "Enable: ride a big confirmed move during news", group = gN, tooltip = "OFF by default. A DIFFERENT, riskier entry than the sweep-reversal system above: inside a news window, if a big DISPLACEMENT candle prints with a confirming close, take it — no sweep, no retest, minimal gating. This trades the FOMO you'd otherwise feel watching from the sidelines, honestly: fewer filters = lower average quality per trade, so size it smaller.")
+newsWin1 = input.session("1230-1330", "  News window 1 (e.g. US data)", group = gN)
+newsWin2 = input.session("1800-1900", "  News window 2 (e.g. FOMC)", group = gN)
+newsDispMult = input.float(1.5, "  Min displacement × ATR", minval = 0.5, step = 0.1, group = gN, tooltip = "How big the candle must be, in ATRs, to count as a real news move rather than noise.")
+
+// ============================== ⑥ DISPLAY ====================================
+gD = "⑥ Display"
 showDash = input.bool(true, "Show dashboard", group = gD)
 dashPos  = input.string("Top Right", "Position", options = ["Top Right","Top Left","Bottom Right","Bottom Left"], group = gD)
 drawLevels = input.bool(true, "Draw key levels / pools", group = gD)
-colorHTF   = input.bool(true, "Color candles by HTF trend", group = gD, tooltip = "Green when the higher timeframe is up (close > its EMA50), red when down. Use it as a constant background bias read.")
+candleColorMode = input.string("HTF Trend", "Color candles by", options = ["HTF Trend", "Volume Pressure", "None"], group = gD, tooltip = "HTF Trend: green when the higher timeframe is up, red when down (constant bias read). Volume Pressure: green/red only on HIGH relative-volume bars in that direction (order-flow-ish; tick volume caveat applies on most gold feeds). None: leave candles alone. Only one mode drives the candles at a time so colors never conflict.")
 htfColorTF = input.timeframe("60", "  HTF for candle color", group = gD)
+volColorMult = input.float(1.5, "  Volume Pressure: min rel-volume ×", minval = 0.5, step = 0.1, group = gD)
 showOB     = input.bool(true, "Draw order blocks (auto-delete on invalidation)", group = gD)
 showFVG    = input.bool(true, "Draw fair value gaps (auto-delete on fill)", group = gD)
 zoneMaxAge = input.int(120, "  Zone max age (bars)", minval = 10, group = gD)
 showSessHL = input.bool(true, "Show last Asia / London / NY high-low", group = gD)
 pressLen   = input.int(20, "Pressure look-back (up vs down displacement)", minval = 2, group = gD, tooltip = "Sums the size of up-moves vs down-moves over N bars. If sellers pushed 6 while buyers pushed 3, net pressure is DOWN — the read you described. Shown on the dashboard; add it as a filter in Extra confirmations.")
 
-// ============================== ⑥ SESSION SHADING ===========================
-gV = "⑥ Session shading (UTC)"
+// ============================== ⑦ SESSION SHADING ===========================
+gV = "⑦ Session shading (UTC)"
 drawSess = input.bool(true, "Shade sessions on chart", group = gV)
 asiaAM = input.session("2300-0300", "Asia morning", group = gV)
 asiaPM = input.session("0300-0700", "Asia noon", group = gV)
@@ -265,7 +303,7 @@ endLon  = not inLon  and inLon[1]
 endNY   = not inNY   and inNY[1]
 
 if endAsia
-    [phA, drA] = f_phase(asiaO, asiaH, asiaL, asiaC, lastSessHi, lastSessLo, refAsia)
+    [phA, drA] = f_phase(asiaO, asiaH, asiaL, asiaC, lastSessHi, lastSessLo, refAsia, expandMult, dirThresh)
     asiaPhase := phA
     aA := aA + (phA == "Accum" ? 1 : 0)
     aM := aM + (phA == "Manip" ? 1 : 0)
@@ -277,7 +315,7 @@ if endAsia
     lastSessDir := drA
     refAsia := na(refAsia) ? asiaH - asiaL : refAsia * 0.8 + (asiaH - asiaL) * 0.2
 if endLon
-    [phL, drL] = f_phase(lonO, lonH, lonL, lonC, lastSessHi, lastSessLo, refLon)
+    [phL, drL] = f_phase(lonO, lonH, lonL, lonC, lastSessHi, lastSessLo, refLon, expandMult, dirThresh)
     lonPhase := phL
     lA := lA + (phL == "Accum" ? 1 : 0)
     lM := lM + (phL == "Manip" ? 1 : 0)
@@ -289,7 +327,7 @@ if endLon
     lastSessDir := drL
     refLon := na(refLon) ? lonH - lonL : refLon * 0.8 + (lonH - lonL) * 0.2
 if endNY
-    [phN, drN] = f_phase(nyO, nyH, nyL, nyC, lastSessHi, lastSessLo, refNY)
+    [phN, drN] = f_phase(nyO, nyH, nyL, nyC, lastSessHi, lastSessLo, refNY, expandMult, dirThresh)
     nyPhase := phN
     nA := nA + (phN == "Accum" ? 1 : 0)
     nM := nM + (phN == "Manip" ? 1 : 0)
@@ -325,6 +363,17 @@ dnDisp   = math.max(open - close, 0)
 netPress = math.sum(upDisp, pressLen) - math.sum(dnDisp, pressLen)
 pressBull = netPress > 0
 pressBear = netPress < 0
+
+// ----- volume-pressure candle coloring (order-flow-ish, tick volume caveat) ---
+volAvgC  = ta.sma(volume, 20)
+relVolC  = volume / math.max(volAvgC, 1)
+volPressUp = relVolC >= volColorMult and close > open
+volPressDn = relVolC >= volColorMult and close < open
+
+// ----- news-momentum entry: a big, confirmed displacement inside a news window
+inNewsWindow = not na(time(timeframe.period, newsWin1, "GMT+0")) or not na(time(timeframe.period, newsWin2, "GMT+0"))
+newsBigBull = useNewsEntry and inNewsWindow and close > open and bodyC >= newsDispMult * atr and bullConf
+newsBigBear = useNewsEntry and inNewsWindow and close < open and bodyC >= newsDispMult * atr and bearConf
 
 // ----- order block / FVG detection (drawn + auto-deleted below) ---------------
 dispUp = close - open > atr
@@ -400,11 +449,15 @@ if pendDir == 1 and (close < zLvl - retestTol * atr or bar_index - pendBar > ret
     pendDir := 0
 if pendDir == -1 and (close > zLvl + retestTol * atr or bar_index - pendBar > retestBars)
     pendDir := 0
-retestBull = pendDir == 1 and bar_index > pendBar and low  <= zLvl + retestTol * atr and bullConf
-retestBear = pendDir == -1 and bar_index > pendBar and high >= zLvl - retestTol * atr and bearConf
+retestBull = pendDir == 1 and bar_index > pendBar and low  <= zLvl + retestTol * atr and (not useCandle or bullConf)
+retestBear = pendDir == -1 and bar_index > pendBar and high >= zLvl - retestTol * atr and (not useCandle or bearConf)
 
 trigBull = entryMode == "Retest zone (plan)" ? retestBull : (sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo) and (not requirePress or pressBull))
 trigBear = entryMode == "Retest zone (plan)" ? retestBear : (sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi) and (not requirePress or pressBear))
+
+// separate, minimally-gated momentum path: a big confirmed candle during a news window
+newsTrigBull = newsBigBull
+newsTrigBear = newsBigBear
 
 if barstate.isconfirmed
     if inTrade
@@ -446,10 +499,11 @@ if barstate.isconfirmed
             lastExitBar := bar_index
             inTrade := false
             dir := 0
-    if not inTrade and cooled and (trigBull or trigBear)
-        dir := trigBull ? 1 : -1
+    if not inTrade and cooled and (trigBull or trigBear or newsTrigBull or newsTrigBear)
+        dir := (trigBull or newsTrigBull) ? 1 : -1
         entryP := close
-        float protLvl = dir == 1 ? (not na(zLvl) ? math.min(zLvl, low) : low) : (not na(zLvl) ? math.max(zLvl, high) : high)
+        float zLvlEff = (trigBull or trigBear) ? zLvl : na
+        float protLvl = dir == 1 ? (not na(zLvlEff) ? math.min(zLvlEff, low) : low) : (not na(zLvlEff) ? math.max(zLvlEff, high) : high)
         float protSwing = dir == 1 ? swingLoN : swingHiN
         float prot = not slBeyondSwing ? protLvl : (dir == 1 ? math.min(protLvl, protSwing) : math.max(protLvl, protSwing))
         float rawSL = stopMode == "Fixed $" ? (dir == 1 ? entryP - slDist : entryP + slDist) : stopMode == "Beyond key level" ? (dir == 1 ? prot - slBuf * atr : prot + slBuf * atr) : (dir == 1 ? math.min(low, prot) - slBuf * atr : math.max(high, prot) + slBuf * atr)
@@ -509,8 +563,8 @@ if barstate.isconfirmed
         peakP := entryP
         beDone := false
         inTrade := true
-        longSig := trigBull
-        shortSig := trigBear
+        longSig := trigBull or newsTrigBull
+        shortSig := trigBear or newsTrigBear
         pendDir := 0
 
 // ============================== STATS ========================================
@@ -534,8 +588,73 @@ plot(showSessHL ? lonL  : na, "London L", color.new(color.lime, 20),   1, plot.s
 plot(showSessHL ? nyH   : na, "NY H",     color.new(color.orange, 20), 1, plot.style_linebr)
 plot(showSessHL ? nyL   : na, "NY L",     color.new(color.orange, 20), 1, plot.style_linebr)
 
+// small name-tag on every level line, at the right edge — no more guessing which is which
+var label lblPDH = na
+var label lblPDL = na
+var label lblPWH = na
+var label lblPWL = na
+var label lblLastH = na
+var label lblLastL = na
+var label lblAsiaH = na
+var label lblAsiaL = na
+var label lblLonH = na
+var label lblLonL = na
+var label lblNyH = na
+var label lblNyL = na
+if barstate.islast
+    int xT = bar_index + 8
+    if not na(lblPDH)
+        label.delete(lblPDH)
+    if drawLevels and usePoolPD and not na(pdh)
+        lblPDH := label.new(xT, pdh, "PDH", style = label.style_label_left, color = color.new(color.red, 100), textcolor = color.new(color.red, 10), size = size.tiny)
+    if not na(lblPDL)
+        label.delete(lblPDL)
+    if drawLevels and usePoolPD and not na(pdl)
+        lblPDL := label.new(xT, pdl, "PDL", style = label.style_label_left, color = color.new(color.green, 100), textcolor = color.new(color.green, 10), size = size.tiny)
+    if not na(lblPWH)
+        label.delete(lblPWH)
+    if drawLevels and usePoolPW and not na(pwh)
+        lblPWH := label.new(xT, pwh, "PWH", style = label.style_label_left, color = color.new(color.orange, 100), textcolor = color.new(color.orange, 10), size = size.tiny)
+    if not na(lblPWL)
+        label.delete(lblPWL)
+    if drawLevels and usePoolPW and not na(pwl)
+        lblPWL := label.new(xT, pwl, "PWL", style = label.style_label_left, color = color.new(color.orange, 100), textcolor = color.new(color.orange, 10), size = size.tiny)
+    if not na(lblLastH)
+        label.delete(lblLastH)
+    if drawLevels and usePoolSess and not na(lastSessHi)
+        lblLastH := label.new(xT, lastSessHi, lastSessName + " H", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.new(color.gray, 10), size = size.tiny)
+    if not na(lblLastL)
+        label.delete(lblLastL)
+    if drawLevels and usePoolSess and not na(lastSessLo)
+        lblLastL := label.new(xT, lastSessLo, lastSessName + " L", style = label.style_label_left, color = color.new(color.gray, 100), textcolor = color.new(color.gray, 10), size = size.tiny)
+    if not na(lblAsiaH)
+        label.delete(lblAsiaH)
+    if showSessHL and not na(asiaH)
+        lblAsiaH := label.new(xT, asiaH, "Asia H", style = label.style_label_left, color = color.new(color.aqua, 100), textcolor = color.new(color.aqua, 10), size = size.tiny)
+    if not na(lblAsiaL)
+        label.delete(lblAsiaL)
+    if showSessHL and not na(asiaL)
+        lblAsiaL := label.new(xT, asiaL, "Asia L", style = label.style_label_left, color = color.new(color.aqua, 100), textcolor = color.new(color.aqua, 10), size = size.tiny)
+    if not na(lblLonH)
+        label.delete(lblLonH)
+    if showSessHL and not na(lonH)
+        lblLonH := label.new(xT, lonH, "London H", style = label.style_label_left, color = color.new(color.lime, 100), textcolor = color.new(color.lime, 10), size = size.tiny)
+    if not na(lblLonL)
+        label.delete(lblLonL)
+    if showSessHL and not na(lonL)
+        lblLonL := label.new(xT, lonL, "London L", style = label.style_label_left, color = color.new(color.lime, 100), textcolor = color.new(color.lime, 10), size = size.tiny)
+    if not na(lblNyH)
+        label.delete(lblNyH)
+    if showSessHL and not na(nyH)
+        lblNyH := label.new(xT, nyH, "NY H", style = label.style_label_left, color = color.new(color.orange, 100), textcolor = color.new(color.orange, 10), size = size.tiny)
+    if not na(lblNyL)
+        label.delete(lblNyL)
+    if showSessHL and not na(nyL)
+        lblNyL := label.new(xT, nyL, "NY L", style = label.style_label_left, color = color.new(color.orange, 100), textcolor = color.new(color.orange, 10), size = size.tiny)
+
 // HTF trend candle coloring (green up / red down)
-barcolor(colorHTF ? (htfcUp ? color.new(color.green, 25) : htfcDn ? color.new(color.red, 25) : na) : na)
+candleCol = candleColorMode == "HTF Trend" ? (htfcUp ? color.new(color.green, 25) : htfcDn ? color.new(color.red, 25) : na) : candleColorMode == "Volume Pressure" ? (volPressUp ? color.new(color.green, 10) : volPressDn ? color.new(color.red, 10) : na) : na
+barcolor(candleCol)
 
 // session shading — morning / noon per session, lunch hour left blank
 inAsiaAM = not na(time(timeframe.period, asiaAM, "GMT+0"))
@@ -552,25 +671,42 @@ bgcolor(drawSess and inLonPM  and not inLunch ? color.new(color.green,  88) : na
 bgcolor(drawSess and inNyAM   and not inLunch ? color.new(color.orange, 93) : na, title = "New York morning")
 bgcolor(drawSess and inNyPM   and not inLunch ? color.new(color.orange, 88) : na, title = "New York noon")
 
-// ----- order blocks & FVGs: draw on formation, auto-delete when invalidated ---
+// big, faint session-name watermark — stamped once at the start of each sub-session
+if drawSess and barstate.isconfirmed
+    if inAsiaAM and not inAsiaAM[1]
+        label.new(bar_index, low, "ASIA AM", style = label.style_none, yloc = yloc.belowbar, textcolor = color.new(color.blue, 60), size = size.huge)
+    if inAsiaPM and not inAsiaPM[1]
+        label.new(bar_index, low, "ASIA PM", style = label.style_none, yloc = yloc.belowbar, textcolor = color.new(color.blue, 60), size = size.huge)
+    if inLonAM and not inLonAM[1]
+        label.new(bar_index, low, "LONDON AM", style = label.style_none, yloc = yloc.belowbar, textcolor = color.new(color.green, 60), size = size.huge)
+    if inLonPM and not inLonPM[1]
+        label.new(bar_index, low, "LONDON PM", style = label.style_none, yloc = yloc.belowbar, textcolor = color.new(color.green, 60), size = size.huge)
+    if inNyAM and not inNyAM[1]
+        label.new(bar_index, low, "NEW YORK AM", style = label.style_none, yloc = yloc.belowbar, textcolor = color.new(color.orange, 60), size = size.huge)
+    if inNyPM and not inNyPM[1]
+        label.new(bar_index, low, "NEW YORK PM", style = label.style_none, yloc = yloc.belowbar, textcolor = color.new(color.orange, 60), size = size.huge)
+
+// ----- order blocks & FVGs: FILLED + clearly labeled, auto-delete when invalidated ---
+// Color language is consistent everywhere: green = demand/bullish, red = supply/bearish.
+// Solid border = Order Block, dashed border = Fair Value Gap — text spells out which.
 var array<box> demZones = array.new<box>()
 var array<box> supZones = array.new<box>()
 if showOB and obBull
     if demZones.size() >= 20
         box.delete(demZones.shift())
-    demZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.green, 30), bgcolor = color.new(color.green, 90), border_style = line.style_solid))
+    demZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 70), border_width = 1, border_style = line.style_solid, text = "OB DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if showOB and obBear
     if supZones.size() >= 20
         box.delete(supZones.shift())
-    supZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.red, 30), bgcolor = color.new(color.red, 90), border_style = line.style_solid))
+    supZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 70), border_width = 1, border_style = line.style_solid, text = "OB SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBull
     if demZones.size() >= 20
         box.delete(demZones.shift())
-    demZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.teal, 40), bgcolor = color.new(color.teal, 92), border_style = line.style_dashed))
+    demZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.green, 35), bgcolor = color.new(color.green, 78), border_width = 1, border_style = line.style_dashed, text = "FVG", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBear
     if supZones.size() >= 20
         box.delete(supZones.shift())
-    supZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.maroon, 40), bgcolor = color.new(color.maroon, 92), border_style = line.style_dashed))
+    supZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.red, 35), bgcolor = color.new(color.red, 78), border_width = 1, border_style = line.style_dashed, text = "FVG", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if demZones.size() > 0
     for i = demZones.size() - 1 to 0
         box bd = demZones.get(i)
@@ -587,6 +723,29 @@ if supZones.size() > 0
             supZones.remove(i)
         else
             box.set_right(bs, bar_index + 2)
+
+// ----- liquidity-direction projection: where the sweep happened, where it's headed
+var line  liqProjLn  = na
+var label liqProjLbl = na
+if armBullNow or armBearNow
+    if not na(liqProjLn)
+        line.delete(liqProjLn)
+    if not na(liqProjLbl)
+        label.delete(liqProjLbl)
+    float sweptPx = armBullNow ? swpLoPrice : swpHiPrice
+    [projT, projN] = f_nextPool(armBullNow ? 1 : -1, sweptPx, pdh, pdl, pwh, pwl, lastSessHi, lastSessLo, lastSessName, asiaH, asiaL)
+    if not na(projT)
+        liqProjLn := line.new(bar_index, sweptPx, bar_index, projT, color = color.new(color.yellow, 30), width = 2, style = line.style_dotted, extend = extend.none)
+        liqProjLbl := label.new(bar_index, projT, "🎯 " + projN, style = armBullNow ? label.style_label_down : label.style_label_up, color = color.new(color.yellow, 60), textcolor = color.white, size = size.tiny)
+if not na(liqProjLn)
+    if pendDir != 0
+        line.set_x2(liqProjLn, bar_index)
+    else
+        line.delete(liqProjLn)
+        liqProjLn := na
+        if not na(liqProjLbl)
+            label.delete(liqProjLbl)
+            liqProjLbl := na
 
 var box   bxSL    = na
 var box   bxTP    = na
@@ -639,10 +798,9 @@ var table dash = table.new(f_pos(), 2, 18, border_width = 1, frame_color = color
 if showDash and barstate.islast
     cW = color.white
     sessTxt = inNY ? "New York" : inLon ? "London" : inAsia ? "Asia" : "—"
-    liveHint = ((sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—") + "  " + (pressBull ? "▲press" : pressBear ? "▼press" : "")
+    liveHint = ((sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—") + "  " + (pressBull ? "▲press" : pressBear ? "▼press" : "") + (useNewsEntry and inNewsWindow ? "  📰news" : "")
     expC = lastSessPhase == "Manip" ? color.new(color.green, 20) : lastSessPhase == "Accum" ? color.new(color.orange, 20) : color.new(color.gray, 30)
-    okEntry = trigBull or trigBear
-    fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) + " " : "") + (requirePress ? "P" + f_chk(pressBull or pressBear) : "")
+    fStr =(requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) + " " : "") + (requirePress ? "P" + f_chk(pressBull or pressBear) : "")
     fStr := fStr == "" ? "soft (none)" : fStr
     verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? (pendDir == 1 ? "⌛ wait retest ▲" : "⌛ wait retest ▼") : "WAIT"
     verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)

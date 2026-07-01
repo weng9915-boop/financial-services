@@ -35,14 +35,25 @@ Direction = the reversal of the sweep (fade the raid, ride the distribution).
   +1R then trail for the furthest pips), *Furthest pool*, or *Fixed RR*.
 Cooldown, opposite-sweep cut, time stop (off for runners).
 
-**Also on the chart:** **HTF candle coloring** (green up / red down, custom TF,
-1h default); **session shading** for Asia / London / New York split morning & noon
-(**lunch hour left blank**); the **last Asia / London / NY high-low** (the liquidity
-pools); and **order blocks + FVGs drawn and auto-deleted** when price invalidates
-them. The dashboard also shows a **net-pressure read** (up-displacement vs
-down-displacement — "sellers pushed 6, buyers pushed 3 → down"), usable as an
-optional filter. **SL can sit beyond the recent swing** so a liquidity sweep of
-your stop level doesn't wick you out before the move.
+**Also on the chart:** **candle coloring** — HTF Trend / Volume Pressure / None,
+one mode at a time so colors never conflict; **session shading** for Asia / London
+/ New York split morning & noon (**lunch hour left blank**), each stamped once
+with a **big, faint watermark name** so you always know which session you're in;
+the **last Asia / London / NY high-low** (the liquidity pools) each with a **small
+name tag** at the right edge — nothing to guess; and **order blocks + FVGs drawn
+as filled, labeled boxes** ("OB DEMAND" / "OB SUPPLY" / "FVG") that **auto-delete**
+when price invalidates them. A **liquidity-direction projection** (dotted line +
+🎯 target tag) is drawn the moment a sweep arms, pointing at the nearest opposing
+pool — *where the liquidity is, and where price wants to go after it*. The
+dashboard also shows a **net-pressure read** (up-displacement vs down-displacement
+— "sellers pushed 6, buyers pushed 3 → down"), usable as an optional filter.
+**SL can sit beyond the recent swing** so a liquidity sweep of your stop level
+doesn't wick you out before the move.
+
+**Optional news-momentum entry** (off by default): a *separate*, minimally-gated
+path — inside a configurable news window, a big confirmed displacement candle is
+taken on its own, no sweep or retest required. Explicitly higher-risk/lower-average
+-quality per trade than the main system; trades the FOMO instead of filtering it out.
 
 The dashboard shows the **current session + live phase**, **today's A/L/N phases**,
 the **next-session expectation**, the entry checklist (pool swept ✓ / candle ✓ /
