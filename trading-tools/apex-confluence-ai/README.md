@@ -37,16 +37,21 @@ Cooldown, opposite-sweep cut, time stop (off for runners).
 
 **Also on the chart:** **candle coloring** — HTF Trend / Volume Pressure / None,
 one mode at a time so colors never conflict; **session shading** for Asia / London
-/ New York split morning & noon (**lunch hour left blank**), each stamped once
-with a **big, faint watermark name** so you always know which session you're in;
-the **last Asia / London / NY high-low** (the liquidity pools) each with a **small
-name tag** at the right edge — nothing to guess; and **order blocks + FVGs drawn
-as filled, labeled boxes** ("OB DEMAND" / "OB SUPPLY" / "FVG") that **auto-delete**
-when price invalidates them. A **liquidity-direction projection** (dotted line +
-🎯 target tag) is drawn the moment a sweep arms, pointing at the nearest opposing
-pool — *where the liquidity is, and where price wants to go after it*. The
-dashboard also shows a **net-pressure read** (up-displacement vs down-displacement
-— "sellers pushed 6, buyers pushed 3 → down"), usable as an optional filter.
+/ New York split morning & noon (**lunch hour left blank**), with a **big
+background name box sized to that session's own running high/low** (Pine's text
+size tops out at a fixed "huge," but the box itself literally grows/shrinks with
+the session); the **last Asia / London / NY high-low** (the liquidity pools) each
+with a **small name tag** at the right edge — nothing to guess; and **order blocks
++ FVGs drawn as filled, labeled boxes** ("OB DEMAND" / "OB SUPPLY" / "FVG") that
+**auto-delete** when price invalidates them. A **liquidity-direction projection**
+(dotted line + 🎯 target tag) is drawn the moment a sweep arms, pointing at the
+nearest opposing pool — *where the liquidity is, and where price wants to go after
+it*. **Market structure** — BOS (continuation), CHoCH (reversal), and MSS (minor/
+early) — are drawn as horizontal lines with the term named at the line's midpoint,
+color-weighted by significance (CHoCH thick fuchsia > BOS blue > MSS thin dotted
+gray); purely informational, not wired into entries. The dashboard also shows a
+**net-pressure read** (up-displacement vs down-displacement — "sellers pushed 6,
+buyers pushed 3 → down"), usable as an optional filter.
 **SL can sit beyond the recent swing** so a liquidity sweep of your stop level
 doesn't wick you out before the move.
 
