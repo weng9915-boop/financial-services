@@ -47,15 +47,23 @@ with a **small name tag** at the right edge — nothing to guess; and **order bl
 (dotted line + 🎯 target tag) is drawn the moment a sweep arms, pointing at the
 nearest opposing pool — *where the liquidity is, and where price wants to go after
 it*. **Market structure** — BOS (continuation), CHoCH (reversal), and MSS (minor/
-early) — drawn as horizontal lines with the term named at the line's midpoint;
-significance is carried by weight/style (CHoCH thick solid > BOS solid > MSS thin
-dotted), not by hue — every directional element follows one **standard color
-rule: up = green, down = red**, everywhere (structure lines, sweep markers, the
-liquidity projection, level tags split H=red/L=green). A **price-action zigzag**
-connects those same swing points (green rising leg, red falling leg) — the
-mechanical, non-repainting stand-in for Elliott Wave; full wave-counting isn't
-implemented on purpose (it's inherently subjective and has to keep relabeling
-itself as new bars form, which is repainting by nature). **Premium / Discount /
+early) — drawn as horizontal lines with the term named at the line's midpoint,
+**each firing once per level** (not repeatedly on every re-cross — it only fires
+again once a genuinely fresh swing forms); significance is carried by weight/style
+(CHoCH thick solid > BOS solid > MSS thin dotted), not by hue — every directional
+element follows one **standard color rule: up = green, down = red**, everywhere
+(structure lines, sweep markers, the liquidity projection, level tags split
+H=red/L=green). **HH / HL / LL / LH** tags mark each new major swing against the
+previous same-type one (mechanical, not subjective) — offset above/below the
+candle so they don't collide with the structure lines at the same price. **CISD**
+(Change in State of Delivery) draws when price closes back through the *open* of
+the last opposite candle before an impulse — the same reference candle as the
+order block, just a tighter, earlier trigger. A **price-action zigzag** connects
+the external swing points (green rising leg, red falling leg) — the mechanical,
+non-repainting stand-in for Elliott Wave; full wave-counting isn't implemented on
+purpose (it's inherently subjective and has to keep relabeling itself as new bars
+form, which is repainting by nature). Zone boxes (OB/FVG) use a **clean solid
+outline**, no dashed/dotted pattern. **Premium / Discount /
 Equilibrium** zones are drawn from the current external swing range (above the
 50% midpoint = Premium/red = favor selling, below = Discount/green = favor
 buying). All of this is purely informational, not wired into entries. The

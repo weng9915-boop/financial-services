@@ -21,7 +21,7 @@
 // =============================================================================
 
 indicator("Apex Session SMC [XAUUSD]", "ApexSMC", overlay = true,
-     max_boxes_count = 60, max_lines_count = 150, max_labels_count = 200, max_bars_back = 500)
+     max_boxes_count = 60, max_lines_count = 200, max_labels_count = 200, max_bars_back = 500)
 
 // ============================== HELPERS ======================================
 f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
@@ -179,6 +179,8 @@ mssSwLen = input.int(4, "  Internal (minor) swing length — MSS", minval = 1, g
 structMaxKeep = input.int(30, "  Max structure lines kept on chart (also caps the zigzag)", minval = 5, maxval = 60, group = gM)
 showZigzag = input.bool(true, "Draw price-action zigzag (swing-to-swing)", group = gM, tooltip = "Connects the same external swing points used for BOS/CHoCH with a line — green for a rising leg, red for a falling leg. This is the mechanical, non-repainting substitute for Elliott Wave: it shows the impulse/correction path without a subjective, revisable wave count.")
 showPremDisc = input.bool(true, "Draw Premium / Discount / Equilibrium", group = gM, tooltip = "Uses the current external swing range (last major high & low) as the dealing range: above the 50% midpoint = Premium (favor selling), below = Discount (favor buying), the 50% line = Equilibrium.")
+showSwingHL = input.bool(true, "Label HH / HL / LL / LH at each swing", group = gM, tooltip = "Mechanical (not subjective): each new major swing is compared to the previous same-type one. HH/HL = bullish structure (green), LL/LH = bearish (red). Turn off if it's too much alongside BOS/CHoCH at the same points.")
+showCISD = input.bool(true, "Draw CISD (Change in State of Delivery)", group = gM, tooltip = "A close back through the OPEN of the last opposite candle before an impulse (the same reference candle as the order block, just its open — a tighter, earlier trigger than the full OB zone).")
 
 // ============================== CALCULATIONS =================================
 atr = ta.atr(atrLen)
@@ -430,24 +432,39 @@ var float minPHVal = na
 var int   minPHBar = na
 var float minPLVal = na
 var int   minPLBar = na
+var bool  extPHBroken = false
+var bool  extPLBroken = false
+var bool  minPHBroken = false
+var bool  minPLBroken = false
+// HH / HL / LL / LH: classify each new swing against the PREVIOUS same-type one.
+var string hiSwingLabel = "—"
+var string loSwingLabel = "—"
 if not na(extPH)
+    hiSwingLabel := na(extPHVal) ? "H" : (extPH > extPHVal ? "HH" : "LH")
     extPHVal := extPH
     extPHBar := bar_index - extSwLen
+    extPHBroken := false
 if not na(extPL)
+    loSwingLabel := na(extPLVal) ? "L" : (extPL > extPLVal ? "HL" : "LL")
     extPLVal := extPL
     extPLBar := bar_index - extSwLen
+    extPLBroken := false
 if not na(minPH)
     minPHVal := minPH
     minPHBar := bar_index - mssSwLen
+    minPHBroken := false
 if not na(minPL)
     minPLVal := minPL
     minPLBar := bar_index - mssSwLen
+    minPLBroken := false
 
 var int structTrend = 0
-extBullBreak = barstate.isconfirmed and not na(extPHVal) and ta.crossover(close, extPHVal)
-extBearBreak = barstate.isconfirmed and not na(extPLVal) and ta.crossunder(close, extPLVal)
-minBullBreak = barstate.isconfirmed and not na(minPHVal) and ta.crossover(close, minPHVal)
-minBearBreak = barstate.isconfirmed and not na(minPLVal) and ta.crossunder(close, minPLVal)
+// Gated by the "broken" flag so a level fires ONCE, not every re-cross until a
+// fresh swing replaces it — fixes BOS/CHoCH/MSS repeating many times over.
+extBullBreak = barstate.isconfirmed and not na(extPHVal) and not extPHBroken and ta.crossover(close, extPHVal)
+extBearBreak = barstate.isconfirmed and not na(extPLVal) and not extPLBroken and ta.crossunder(close, extPLVal)
+minBullBreak = barstate.isconfirmed and not na(minPHVal) and not minPHBroken and ta.crossover(close, minPHVal)
+minBearBreak = barstate.isconfirmed and not na(minPLVal) and not minPLBroken and ta.crossunder(close, minPLVal)
 
 isBosUp   = extBullBreak and structTrend == 1
 isChochUp = extBullBreak and structTrend != 1
@@ -457,9 +474,39 @@ isMssUp   = minBullBreak and structTrend == -1 and not isChochUp
 isMssDn   = minBearBreak and structTrend == 1 and not isChochDn
 
 if extBullBreak
+    extPHBroken := true
     structTrend := 1
 if extBearBreak
+    extPLBroken := true
     structTrend := -1
+if minBullBreak
+    minPHBroken := true
+if minBearBreak
+    minPLBroken := true
+
+// ----- CISD (Change in State of Delivery): close back through the OPEN of the
+// last opposite candle before the impulse — the same reference candle used for
+// the order block, just a tighter trigger (its open, not the whole zone).
+var float cisdBullLvl  = na
+var int   cisdBullBar  = na
+var bool  cisdBullDone = false
+var float cisdBearLvl  = na
+var int   cisdBearBar  = na
+var bool  cisdBearDone = false
+if obBull
+    cisdBullLvl := open[1]
+    cisdBullBar := bar_index - 1
+    cisdBullDone := false
+if obBear
+    cisdBearLvl := open[1]
+    cisdBearBar := bar_index - 1
+    cisdBearDone := false
+cisdBullConfirm = barstate.isconfirmed and not na(cisdBullLvl) and not cisdBullDone and ta.crossover(close, cisdBullLvl)
+cisdBearConfirm = barstate.isconfirmed and not na(cisdBearLvl) and not cisdBearDone and ta.crossunder(close, cisdBearLvl)
+if cisdBullConfirm
+    cisdBullDone := true
+if cisdBearConfirm
+    cisdBearDone := true
 
 // ----- premium / discount / equilibrium — the current external swing range ---
 pdHasRange = not na(extPHVal) and not na(extPLVal)
@@ -787,11 +834,11 @@ if showOB and obBear
 if showFVG and fvgBull
     if demZones.size() >= 20
         box.delete(demZones.shift())
-    demZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.green, 35), bgcolor = color.new(color.green, 78), border_width = 1, border_style = line.style_dashed, text = "FVG DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    demZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 78), border_width = 1, border_style = line.style_solid, text = "FVG DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBear
     if supZones.size() >= 20
         box.delete(supZones.shift())
-    supZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.red, 35), bgcolor = color.new(color.red, 78), border_width = 1, border_style = line.style_dashed, text = "FVG SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    supZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 78), border_width = 1, border_style = line.style_solid, text = "FVG SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
 if demZones.size() > 0
     for i = demZones.size() - 1 to 0
         box bd = demZones.get(i)
@@ -876,6 +923,38 @@ if showStructure and barstate.isconfirmed
             label.delete(structLabels.shift())
         structLines.push(line.new(minPLBar, minPLVal, bar_index, minPLVal, color = color.new(color.red, 55), width = 1, style = line.style_dotted))
         structLabels.push(label.new(math.round((minPLBar + bar_index) / 2), minPLVal, "MSS ▼", style = label.style_none, color = na, textcolor = color.new(color.red, 35), size = size.tiny))
+
+// ----- HH / HL / LL / LH tags, offset off the candle so they don't sit on the
+// horizontal BOS/CHoCH lines at the same price. Mechanical (not subjective).
+var array<label> swingHLLabels = array.new<label>()
+if showSwingHL and barstate.isconfirmed
+    if not na(extPH)
+        if swingHLLabels.size() >= 20
+            label.delete(swingHLLabels.shift())
+        color hiCol = hiSwingLabel == "HH" ? color.new(color.green, 0) : hiSwingLabel == "LH" ? color.new(color.red, 0) : color.new(color.gray, 30)
+        swingHLLabels.push(label.new(extPHBar, extPHVal, hiSwingLabel, style = label.style_none, yloc = yloc.abovebar, color = na, textcolor = hiCol, size = size.tiny))
+    if not na(extPL)
+        if swingHLLabels.size() >= 20
+            label.delete(swingHLLabels.shift())
+        color loCol = loSwingLabel == "HL" ? color.new(color.green, 0) : loSwingLabel == "LL" ? color.new(color.red, 0) : color.new(color.gray, 30)
+        swingHLLabels.push(label.new(extPLBar, extPLVal, loSwingLabel, style = label.style_none, yloc = yloc.belowbar, color = na, textcolor = loCol, size = size.tiny))
+
+// ----- CISD: line at the reference open, name at the confirmation (right end) -
+var array<line>  cisdLines  = array.new<line>()
+var array<label> cisdLabels = array.new<label>()
+if showCISD and barstate.isconfirmed
+    if cisdBullConfirm
+        if cisdLines.size() >= 20
+            line.delete(cisdLines.shift())
+            label.delete(cisdLabels.shift())
+        cisdLines.push(line.new(cisdBullBar, cisdBullLvl, bar_index, cisdBullLvl, color = color.new(color.green, 0), width = 2))
+        cisdLabels.push(label.new(bar_index, cisdBullLvl, "CISD", style = label.style_none, color = na, textcolor = color.new(color.green, 0), size = size.small))
+    if cisdBearConfirm
+        if cisdLines.size() >= 20
+            line.delete(cisdLines.shift())
+            label.delete(cisdLabels.shift())
+        cisdLines.push(line.new(cisdBearBar, cisdBearLvl, bar_index, cisdBearLvl, color = color.new(color.red, 0), width = 2))
+        cisdLabels.push(label.new(bar_index, cisdBearLvl, "CISD", style = label.style_none, color = na, textcolor = color.new(color.red, 0), size = size.small))
 
 // ----- price-action zigzag: connects the same external swings as BOS/CHoCH ---
 // Green = rising leg (up), red = falling leg (down) — the mechanical, non-
