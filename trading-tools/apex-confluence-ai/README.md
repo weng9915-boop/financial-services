@@ -88,7 +88,17 @@ your stop level doesn't wick you out before the move.
 > them affect entries and TradingView already draws trade markers natively for
 > strategy scripts — keeps the file focused on the part that determines the
 > numbers. Set Commission + Slippage in **Properties** to your broker's real
-> figures, or the backtest is fiction.
+> figures, or the backtest is fiction. Declares `margin_long`/`margin_short = 5`
+> (20:1 leverage) — Pine defaults both to **100** (no leverage) if left unset,
+> and at gold's ~$4000/oz price a normal risk-% position size on a $10k account
+> then needs far more buying power than the account has, so the broker emulator
+> **silently cancels every order** (it never auto-shrinks one) and the Strategy
+> Tester shows zero trades with no error. The position-sizing formula also
+> soft-caps `qty` to what the configured leverage can actually afford (so a
+> tight stop shrinks the size instead of getting the order cancelled) and
+> divides by `syminfo.pointvalue` for correctness if you ever point the script
+> at a gold futures symbol instead of a spot/CFD one. Adjust the margin values
+> to match your actual broker's real leverage.
 
 **Optional news-momentum entry** (off by default): a *separate*, minimally-gated
 path — inside a configurable news window, a big confirmed displacement candle is

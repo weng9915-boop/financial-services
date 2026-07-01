@@ -26,7 +26,13 @@ strategy("Apex Session SMC [XAUUSD] - Strategy", "ApexSMC-Str", overlay = true,
      initial_capital = 10000, currency = currency.USD,
      default_qty_type = strategy.fixed, default_qty_value = 1,
      commission_type = strategy.commission.percent, commission_value = 0.02, slippage = 2,
+     margin_long = 5, margin_short = 5,
      max_boxes_count = 20, max_lines_count = 20, max_labels_count = 50, max_bars_back = 500)
+// margin_long/short = 5 simulates 20:1 leverage (ESMA's real-world retail cap for metals).
+// Pine defaults BOTH to 100 (no leverage) if left unset — at gold's ~$4000/oz price, a
+// normal risk-based size on a $10k account then needs far more buying power than the
+// account has, so the broker emulator silently CANCELS every order (never auto-shrinks
+// it) and the Strategy Tester shows zero trades. Adjust to your real broker's leverage.
 
 // ============================== HELPERS ======================================
 f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
@@ -499,7 +505,13 @@ if barstate.isconfirmed
         shortSig := trigBear or newsTrigBear
 
         float riskAmt = strategy.equity * riskPct / 100
-        float qty = riskDist > 0 ? riskAmt / riskDist : 0.0
+        float qty = riskDist > 0 ? riskAmt / (riskDist * syminfo.pointvalue) : 0.0
+        // soft-cap so a tight stop can't ask for more buying power than the account's
+        // leverage (margin_long/short = 5 above) actually allows; Pine cancels oversized
+        // orders outright rather than shrinking them, so we shrink qty ourselves first
+        float marginPctAssumed = 5.0
+        float maxQtyByMargin = strategy.equity * 0.9 / (close * syminfo.pointvalue * marginPctAssumed / 100)
+        qty := math.min(qty, maxQtyByMargin)
         if qty > 0
             if dir == 1
                 strategy.entry("Long", strategy.long, qty = qty, comment = "Long")
