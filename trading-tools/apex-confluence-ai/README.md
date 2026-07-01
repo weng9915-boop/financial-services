@@ -47,13 +47,22 @@ with a **small name tag** at the right edge — nothing to guess; and **order bl
 (dotted line + 🎯 target tag) is drawn the moment a sweep arms, pointing at the
 nearest opposing pool — *where the liquidity is, and where price wants to go after
 it*. **Market structure** — BOS (continuation), CHoCH (reversal), and MSS (minor/
-early) — are drawn as horizontal lines with the term named at the line's midpoint,
-color-weighted by significance (CHoCH thick fuchsia > BOS blue > MSS thin dotted
-gray); purely informational, not wired into entries. The dashboard also shows a
-**net-pressure read** (up-displacement vs down-displacement — "sellers pushed 6,
-buyers pushed 3 → down"), usable as an optional filter.
-**SL can sit beyond the recent swing** so a liquidity sweep of your stop level
-doesn't wick you out before the move.
+early) — drawn as horizontal lines with the term named at the line's midpoint;
+significance is carried by weight/style (CHoCH thick solid > BOS solid > MSS thin
+dotted), not by hue — every directional element follows one **standard color
+rule: up = green, down = red**, everywhere (structure lines, sweep markers, the
+liquidity projection, level tags split H=red/L=green). A **price-action zigzag**
+connects those same swing points (green rising leg, red falling leg) — the
+mechanical, non-repainting stand-in for Elliott Wave; full wave-counting isn't
+implemented on purpose (it's inherently subjective and has to keep relabeling
+itself as new bars form, which is repainting by nature). **Premium / Discount /
+Equilibrium** zones are drawn from the current external swing range (above the
+50% midpoint = Premium/red = favor selling, below = Discount/green = favor
+buying). All of this is purely informational, not wired into entries. The
+dashboard also shows a **net-pressure read** (up-displacement vs
+down-displacement — "sellers pushed 6, buyers pushed 3 → down"), usable as an
+optional filter. **SL can sit beyond the recent swing** so a liquidity sweep of
+your stop level doesn't wick you out before the move.
 
 **Optional news-momentum entry** (off by default): a *separate*, minimally-gated
 path — inside a configurable news window, a big confirmed displacement candle is
