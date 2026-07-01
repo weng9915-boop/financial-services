@@ -85,6 +85,7 @@ useStrongSR = input.bool(false, "Require strong (tested) level", group = gX, too
 srTouches = input.int(2, "  Min touches", minval = 1, group = gX)
 srLook    = input.int(50, "  Touch lookback (bars)", minval = 5, maxval = 480, group = gX)
 srTol     = input.float(0.4, "  Touch tolerance × ATR", minval = 0.05, step = 0.05, group = gX)
+requirePress = input.bool(false, "Require net pressure agrees", group = gX, tooltip = "Only take longs when up-displacement > down-displacement over the look-back (buyers pushing harder), and vice-versa. Your 'more seller / more demand' read, as a hard filter.")
 
 // ============================== ④ EXECUTION ==================================
 gR = "④ Execution — locked levels"
@@ -93,6 +94,8 @@ stopMode = input.string("Beyond key level", "Stop placement", options = ["Beyond
 slDist   = input.float(10.0, "  Fixed $ stop distance", minval = 0.1, step = 0.5, group = gR)
 slBuf    = input.float(0.3, "  Sweep buffer × ATR", minval = 0, step = 0.1, group = gR)
 minStopAtr = input.float(0.8, "  Min stop × ATR (no micro-stops)", minval = 0, step = 0.1, group = gR, tooltip = "Floor on stop distance so a tiny sweep wick doesn't make a micro-stop that gets wicked out and a too-small trade. Wider stop = a touch lower RR but survivable.")
+slBeyondSwing = input.bool(true, "  SL beyond recent swing (survive the sweep)", group = gR, tooltip = "IMPORTANT: a stop sitting AT a key level is exactly where liquidity rests, so it gets swept. This pushes the SL past the recent swing extreme (past the stop-hunt zone). Wider stop, lower RR, but you don't get wicked out right before the move.")
+slSwingLook = input.int(10, "    Swing look-back (bars)", minval = 2, group = gR)
 tgtMode  = input.string("Next key level", "Target mode", options = ["Next key level","Trail runner","Furthest pool","Fixed RR"], group = gR, tooltip = "Next key level = TP at the NEAREST opposing key level (structure, not a ratio). Trail runner = breakeven at +1R then trail for the furthest pips. Furthest pool = the farthest liquidity. Fixed RR = a set multiple.")
 rr       = input.float(5.0, "Reward : Risk (Fixed RR mode)", minval = 0.5, step = 0.5, group = gR)
 beR      = input.float(1.0, "  Runner: breakeven at +R", minval = 0.1, step = 0.1, group = gR)
@@ -110,6 +113,11 @@ dashPos  = input.string("Top Right", "Position", options = ["Top Right","Top Lef
 drawLevels = input.bool(true, "Draw key levels / pools", group = gD)
 colorHTF   = input.bool(true, "Color candles by HTF trend", group = gD, tooltip = "Green when the higher timeframe is up (close > its EMA50), red when down. Use it as a constant background bias read.")
 htfColorTF = input.timeframe("60", "  HTF for candle color", group = gD)
+showOB     = input.bool(true, "Draw order blocks (auto-delete on invalidation)", group = gD)
+showFVG    = input.bool(true, "Draw fair value gaps (auto-delete on fill)", group = gD)
+zoneMaxAge = input.int(120, "  Zone max age (bars)", minval = 10, group = gD)
+showSessHL = input.bool(true, "Show last Asia / London / NY high-low", group = gD)
+pressLen   = input.int(20, "Pressure look-back (up vs down displacement)", minval = 2, group = gD, tooltip = "Sums the size of up-moves vs down-moves over N bars. If sellers pushed 6 while buyers pushed 3, net pressure is DOWN — the read you described. Shown on the dashboard; add it as a filter in Extra confirmations.")
 
 // ============================== ⑥ SESSION SHADING ===========================
 gV = "⑥ Session shading (UTC)"
@@ -120,6 +128,10 @@ lonAM  = input.session("0700-0930", "London morning", group = gV)
 lonPM  = input.session("0930-1200", "London noon", group = gV)
 nyAM   = input.session("1200-1500", "New York morning", group = gV)
 nyPM   = input.session("1500-2100", "New York noon", group = gV)
+blankLunch = input.bool(true, "Blank the lunch hour (no shading)", group = gV)
+asiaLunch = input.session("0300-0400", "  Asia lunch", group = gV)
+lonLunch  = input.session("1000-1100", "  London lunch", group = gV)
+nyLunch   = input.session("1600-1700", "  New York lunch", group = gV)
 
 // ============================== CALCULATIONS =================================
 atr = ta.atr(atrLen)
@@ -307,6 +319,23 @@ bullConf = (bullEng or bullPin or bullMar) and not isDoji
 bearConf = (bearEng or bearPin or bearMar) and not isDoji
 cndName = isDoji ? "doji" : (bullEng or bearEng) ? "engulf" : (bullPin or bearPin) ? "pin" : (bullMar or bearMar) ? "strong" : "—"
 
+// ----- net displacement pressure (up-moves vs down-moves, your 3-vs-6 read) ---
+upDisp   = math.max(close - open, 0)
+dnDisp   = math.max(open - close, 0)
+netPress = math.sum(upDisp, pressLen) - math.sum(dnDisp, pressLen)
+pressBull = netPress > 0
+pressBear = netPress < 0
+
+// ----- order block / FVG detection (drawn + auto-deleted below) ---------------
+dispUp = close - open > atr
+dispDn = open - close > atr
+obBull = dispUp and close[1] < open[1]   // last down candle before an up impulse = demand
+obBear = dispDn and close[1] > open[1]   // last up candle before a down impulse = supply
+fvgBull = low > high[2]                   // 3-candle imbalance up
+fvgBear = high < low[2]                   // 3-candle imbalance down
+swingLoN = ta.lowest(low,  slSwingLook)   // recent liquidity below (for SL beyond the sweep)
+swingHiN = ta.highest(high, slSwingLook)  // recent liquidity above
+
 // ----- liquidity sweep (the manipulation, in real time) ----------------------
 sweepLoNow = (usePoolSess and f_swLo(lastSessLo)) or (usePoolPD and f_swLo(pdl)) or (usePoolPW and f_swLo(pwl)) or (usePoolAsia and f_swLo(asiaL))
 sweepHiNow = (usePoolSess and f_swHi(lastSessHi)) or (usePoolPD and f_swHi(pdh)) or (usePoolPW and f_swHi(pwh)) or (usePoolAsia and f_swHi(asiaH))
@@ -357,8 +386,8 @@ swpLoPrice = (usePoolSess and f_swLo(lastSessLo)) ? lastSessLo : (usePoolPD and 
 swpHiPrice = (usePoolSess and f_swHi(lastSessHi)) ? lastSessHi : (usePoolPD and f_swHi(pdh)) ? pdh : (usePoolPW and f_swHi(pwh)) ? pwh : (usePoolAsia and f_swHi(asiaH)) ? asiaH : na
 strongLo = f_touches(swpLoPrice, srTol * atr, srLook) >= srTouches
 strongHi = f_touches(swpHiPrice, srTol * atr, srLook) >= srTouches
-armBullNow = sweepLoNow and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo)
-armBearNow = sweepHiNow and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi)
+armBullNow = sweepLoNow and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo) and (not requirePress or pressBull)
+armBearNow = sweepHiNow and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi) and (not requirePress or pressBear)
 if armBullNow
     pendDir := 1
     zLvl := swpLoPrice
@@ -374,8 +403,8 @@ if pendDir == -1 and (close > zLvl + retestTol * atr or bar_index - pendBar > re
 retestBull = pendDir == 1 and bar_index > pendBar and low  <= zLvl + retestTol * atr and bullConf
 retestBear = pendDir == -1 and bar_index > pendBar and high >= zLvl - retestTol * atr and bearConf
 
-trigBull = entryMode == "Retest zone (plan)" ? retestBull : (sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo))
-trigBear = entryMode == "Retest zone (plan)" ? retestBear : (sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi))
+trigBull = entryMode == "Retest zone (plan)" ? retestBull : (sweepLoNow and (not useCandle or bullConf) and inSessionOK and (not requireBias or biasBull) and (not requireMom or momBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo) and (not requirePress or pressBull))
+trigBear = entryMode == "Retest zone (plan)" ? retestBear : (sweepHiNow and (not useCandle or bearConf) and inSessionOK and (not requireBias or biasBear) and (not requireMom or momBear) and (not requireChoch or chochArmBear) and (not requireSMT or smtBear) and (not useStrongSR or strongHi) and (not requirePress or pressBear))
 
 if barstate.isconfirmed
     if inTrade
@@ -420,8 +449,10 @@ if barstate.isconfirmed
     if not inTrade and cooled and (trigBull or trigBear)
         dir := trigBull ? 1 : -1
         entryP := close
-        float prot = dir == 1 ? (not na(zLvl) ? math.min(zLvl, low) : low) : (not na(zLvl) ? math.max(zLvl, high) : high)
-        float rawSL = stopMode == "Fixed $" ? (dir == 1 ? entryP - slDist : entryP + slDist) : stopMode == "Beyond key level" ? (dir == 1 ? prot - slBuf * atr : prot + slBuf * atr) : (dir == 1 ? low - slBuf * atr : high + slBuf * atr)
+        float protLvl = dir == 1 ? (not na(zLvl) ? math.min(zLvl, low) : low) : (not na(zLvl) ? math.max(zLvl, high) : high)
+        float protSwing = dir == 1 ? swingLoN : swingHiN
+        float prot = not slBeyondSwing ? protLvl : (dir == 1 ? math.min(protLvl, protSwing) : math.max(protLvl, protSwing))
+        float rawSL = stopMode == "Fixed $" ? (dir == 1 ? entryP - slDist : entryP + slDist) : stopMode == "Beyond key level" ? (dir == 1 ? prot - slBuf * atr : prot + slBuf * atr) : (dir == 1 ? math.min(low, prot) - slBuf * atr : math.max(high, prot) + slBuf * atr)
         float floorSL = dir == 1 ? entryP - minStopAtr * atr : entryP + minStopAtr * atr
         rawSL := dir == 1 ? math.min(rawSL, floorSL) : math.max(rawSL, floorSL)
         float minR = 0.2 * atr
@@ -492,27 +523,70 @@ plot(drawLevels and usePoolPD ? pdh : na, "PDH", color.new(color.red, 40),    1,
 plot(drawLevels and usePoolPD ? pdl : na, "PDL", color.new(color.green, 40),  1, plot.style_linebr)
 plot(drawLevels and usePoolPW ? pwh : na, "PWH", color.new(color.orange, 30), 1, plot.style_linebr)
 plot(drawLevels and usePoolPW ? pwl : na, "PWL", color.new(color.orange, 30), 1, plot.style_linebr)
-plot(drawLevels and usePoolAsia ? asiaH : na, "Asia H", color.new(color.aqua, 30), 1, plot.style_linebr)
-plot(drawLevels and usePoolAsia ? asiaL : na, "Asia L", color.new(color.aqua, 30), 1, plot.style_linebr)
 plot(drawLevels and usePoolSess ? lastSessHi : na, "Last H", color.new(color.gray, 20), 1, plot.style_linebr)
 plot(drawLevels and usePoolSess ? lastSessLo : na, "Last L", color.new(color.gray, 20), 1, plot.style_linebr)
+
+// last Asia / London / New York high-low (always visible = the liquidity pools)
+plot(showSessHL ? asiaH : na, "Asia H",   color.new(color.aqua, 20),   1, plot.style_linebr)
+plot(showSessHL ? asiaL : na, "Asia L",   color.new(color.aqua, 20),   1, plot.style_linebr)
+plot(showSessHL ? lonH  : na, "London H", color.new(color.lime, 20),   1, plot.style_linebr)
+plot(showSessHL ? lonL  : na, "London L", color.new(color.lime, 20),   1, plot.style_linebr)
+plot(showSessHL ? nyH   : na, "NY H",     color.new(color.orange, 20), 1, plot.style_linebr)
+plot(showSessHL ? nyL   : na, "NY L",     color.new(color.orange, 20), 1, plot.style_linebr)
 
 // HTF trend candle coloring (green up / red down)
 barcolor(colorHTF ? (htfcUp ? color.new(color.green, 25) : htfcDn ? color.new(color.red, 25) : na) : na)
 
-// session shading — morning / noon per session
+// session shading — morning / noon per session, lunch hour left blank
 inAsiaAM = not na(time(timeframe.period, asiaAM, "GMT+0"))
 inAsiaPM = not na(time(timeframe.period, asiaPM, "GMT+0"))
 inLonAM  = not na(time(timeframe.period, lonAM,  "GMT+0"))
 inLonPM  = not na(time(timeframe.period, lonPM,  "GMT+0"))
 inNyAM   = not na(time(timeframe.period, nyAM,   "GMT+0"))
 inNyPM   = not na(time(timeframe.period, nyPM,   "GMT+0"))
-bgcolor(drawSess and inAsiaAM ? color.new(color.blue,   93) : na, title = "Asia morning")
-bgcolor(drawSess and inAsiaPM ? color.new(color.blue,   88) : na, title = "Asia noon")
-bgcolor(drawSess and inLonAM  ? color.new(color.green,  93) : na, title = "London morning")
-bgcolor(drawSess and inLonPM  ? color.new(color.green,  88) : na, title = "London noon")
-bgcolor(drawSess and inNyAM   ? color.new(color.orange, 93) : na, title = "New York morning")
-bgcolor(drawSess and inNyPM   ? color.new(color.orange, 88) : na, title = "New York noon")
+inLunch  = blankLunch and (not na(time(timeframe.period, asiaLunch, "GMT+0")) or not na(time(timeframe.period, lonLunch, "GMT+0")) or not na(time(timeframe.period, nyLunch, "GMT+0")))
+bgcolor(drawSess and inAsiaAM and not inLunch ? color.new(color.blue,   93) : na, title = "Asia morning")
+bgcolor(drawSess and inAsiaPM and not inLunch ? color.new(color.blue,   88) : na, title = "Asia noon")
+bgcolor(drawSess and inLonAM  and not inLunch ? color.new(color.green,  93) : na, title = "London morning")
+bgcolor(drawSess and inLonPM  and not inLunch ? color.new(color.green,  88) : na, title = "London noon")
+bgcolor(drawSess and inNyAM   and not inLunch ? color.new(color.orange, 93) : na, title = "New York morning")
+bgcolor(drawSess and inNyPM   and not inLunch ? color.new(color.orange, 88) : na, title = "New York noon")
+
+// ----- order blocks & FVGs: draw on formation, auto-delete when invalidated ---
+var array<box> demZones = array.new<box>()
+var array<box> supZones = array.new<box>()
+if showOB and obBull
+    if demZones.size() >= 20
+        box.delete(demZones.shift())
+    demZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.green, 30), bgcolor = color.new(color.green, 90), border_style = line.style_solid))
+if showOB and obBear
+    if supZones.size() >= 20
+        box.delete(supZones.shift())
+    supZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.red, 30), bgcolor = color.new(color.red, 90), border_style = line.style_solid))
+if showFVG and fvgBull
+    if demZones.size() >= 20
+        box.delete(demZones.shift())
+    demZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.teal, 40), bgcolor = color.new(color.teal, 92), border_style = line.style_dashed))
+if showFVG and fvgBear
+    if supZones.size() >= 20
+        box.delete(supZones.shift())
+    supZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.maroon, 40), bgcolor = color.new(color.maroon, 92), border_style = line.style_dashed))
+if demZones.size() > 0
+    for i = demZones.size() - 1 to 0
+        box bd = demZones.get(i)
+        if close < box.get_bottom(bd) or bar_index - box.get_left(bd) > zoneMaxAge
+            box.delete(bd)
+            demZones.remove(i)
+        else
+            box.set_right(bd, bar_index + 2)
+if supZones.size() > 0
+    for i = supZones.size() - 1 to 0
+        box bs = supZones.get(i)
+        if close > box.get_top(bs) or bar_index - box.get_left(bs) > zoneMaxAge
+            box.delete(bs)
+            supZones.remove(i)
+        else
+            box.set_right(bs, bar_index + 2)
 
 var box   bxSL    = na
 var box   bxTP    = na
@@ -565,10 +639,10 @@ var table dash = table.new(f_pos(), 2, 18, border_width = 1, frame_color = color
 if showDash and barstate.islast
     cW = color.white
     sessTxt = inNY ? "New York" : inLon ? "London" : inAsia ? "Asia" : "—"
-    liveHint = (sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—"
+    liveHint = ((sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—") + "  " + (pressBull ? "▲press" : pressBear ? "▼press" : "")
     expC = lastSessPhase == "Manip" ? color.new(color.green, 20) : lastSessPhase == "Accum" ? color.new(color.orange, 20) : color.new(color.gray, 30)
     okEntry = trigBull or trigBear
-    fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) : "")
+    fStr = (requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) + " " : "") + (requirePress ? "P" + f_chk(pressBull or pressBear) : "")
     fStr := fStr == "" ? "soft (none)" : fStr
     verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? (pendDir == 1 ? "⌛ wait retest ▲" : "⌛ wait retest ▼") : "WAIT"
     verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)

@@ -36,8 +36,13 @@ Direction = the reversal of the sweep (fade the raid, ride the distribution).
 Cooldown, opposite-sweep cut, time stop (off for runners).
 
 **Also on the chart:** **HTF candle coloring** (green up / red down, custom TF,
-1h default) and **session shading** for Asia / London / New York, split morning
-and noon.
+1h default); **session shading** for Asia / London / New York split morning & noon
+(**lunch hour left blank**); the **last Asia / London / NY high-low** (the liquidity
+pools); and **order blocks + FVGs drawn and auto-deleted** when price invalidates
+them. The dashboard also shows a **net-pressure read** (up-displacement vs
+down-displacement — "sellers pushed 6, buyers pushed 3 → down"), usable as an
+optional filter. **SL can sit beyond the recent swing** so a liquidity sweep of
+your stop level doesn't wick you out before the move.
 
 The dashboard shows the **current session + live phase**, **today's A/L/N phases**,
 the **next-session expectation**, the entry checklist (pool swept ✓ / candle ✓ /
