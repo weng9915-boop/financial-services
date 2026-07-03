@@ -77,8 +77,32 @@ down-displacement — "sellers pushed 6, buyers pushed 3 → down"), usable as a
 optional filter. **SL can sit beyond the recent swing** so a liquidity sweep of
 your stop level doesn't wick you out before the move.
 
-> **`ApexSessionSMC_Strategy.pine`** — the **Strategy-Tester** version. Same
-> sessions/phases/sweep/retest/filters/execution (incl. the trailing runner and
+**Equal Highs / Equal Lows (EQH/EQL)** — a new liquidity-pool type: two major
+swings of the same type within a tight ATR-tolerance are a real double-top/
+bottom-style resting-liquidity pool (standard ICT/SMC), drawn as a horizontal
+tie-line with the term at the midpoint. It's wired in as a **fifth sweep pool**
+(`usePoolEQ`) alongside session/day/week/Asia H-L — more *valid* sweep targets,
+not a loosened trigger, so it's a direct answer to "too few entries." **Breaker
+Blocks**: when an order block gets genuinely closed through (not just aged out),
+it flips into support/resistance in the *opposite* direction instead of just
+disappearing — labeled "BREAKER" so it's never confused with a fresh OB, and it
+gets deleted itself once price closes back through it too. **S/R confirmed-level
+display**: every key-level tag (PDH, Asia H, session H/L, …) now shows its live
+touch-count against the same tolerance/lookback/threshold the "Require strong
+(tested) level" filter uses (e.g. `PDH ×3 ✓`) — so you can *see* which levels
+would actually pass that filter before turning it on, instead of guessing.
+**Multi-timeframe confluence row** on the dashboard — 5m/15m/1h/4h/1D trend vs.
+each TF's own 50-EMA, shown as arrows plus an agreement count out of 5. Purely
+informational, no effect on entries; the count is just how many timeframes
+agree, not a calibrated probability. **OTE (Optimal Trade Entry)** — the classic
+ICT "golden ratio" 61.8%-78.6% Fibonacci pullback zone, derived from the same
+external swing range as Premium/Discount, drawn as a gold band and available as
+an optional entry filter (`requireOTE`) — a tighter refinement on top of the
+plain 50% Premium/Discount split.
+
+> **`ApexSessionSMC_Strategy.pine`** — the **Strategy-Tester** version, currently
+> **frozen** (not being developed further — the indicator above is the focus).
+> Same sessions/phases/sweep/retest/filters/execution (incl. the trailing runner and
 > news-momentum entry), wired to `strategy.entry`/`strategy.exit`/`strategy.close`
 > with **risk-% position sizing** instead of the indicator's homemade R-multiple
 > counters — real fills, real equity curve, real max drawdown, no broker/account
