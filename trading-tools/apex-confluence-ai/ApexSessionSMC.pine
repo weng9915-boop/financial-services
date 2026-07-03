@@ -23,6 +23,13 @@
 indicator("Apex Session SMC [XAUUSD]", "ApexSMC", overlay = true,
      max_boxes_count = 150, max_lines_count = 200, max_labels_count = 200, max_bars_back = 500)
 
+// TradingView/LuxAlgo-native palette (matches the reference graphic) — replaces
+// Pine's brighter built-in colBull/colBear everywhere below, same up/down
+// meaning, more muted/professional hue. Session-identity colors (blue/green/
+// orange for Asia/London/NY) are untouched — that's identity, not direction.
+color colBull = #089981
+color colBear = #F23645
+
 // ============================== HELPERS ======================================
 f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
 f_swHi(float p) => not na(p) and close[1] <= p and high > p and close < p   // was below, raided above, reclaimed
@@ -759,8 +766,8 @@ avgR    = nT > 0 ? sumR / nT : 0.0
 pf      = grL > 0 ? grW / grL : (grW > 0 ? 999.0 : 0.0)
 
 // ============================== DRAWING ======================================
-plot(drawLevels and usePoolPD ? pdh : na, "PDH", color.new(color.red, 40),    1, plot.style_linebr)
-plot(drawLevels and usePoolPD ? pdl : na, "PDL", color.new(color.green, 40),  1, plot.style_linebr)
+plot(drawLevels and usePoolPD ? pdh : na, "PDH", color.new(colBear, 40),    1, plot.style_linebr)
+plot(drawLevels and usePoolPD ? pdl : na, "PDL", color.new(colBull, 40),  1, plot.style_linebr)
 plot(drawLevels and usePoolPW ? pwh : na, "PWH", color.new(color.orange, 30), 1, plot.style_linebr)
 plot(drawLevels and usePoolPW ? pwl : na, "PWL", color.new(color.orange, 30), 1, plot.style_linebr)
 plot(drawLevels and usePoolSess ? lastSessHi : na, "Last H", color.new(color.gray, 20), 1, plot.style_linebr)
@@ -807,54 +814,54 @@ if barstate.islast
     if not na(lblPDH)
         label.delete(lblPDH)
     if drawLevels and usePoolPD and not na(pdh)
-        lblPDH := label.new(xT, pdh, f_lvlTxt("PDH", tPDH, srTouches), style = label.style_label_left, color = color.new(color.red, 100), textcolor = color.new(color.red, 10), size = size.tiny)
+        lblPDH := label.new(xT, pdh, f_lvlTxt("PDH", tPDH, srTouches), style = label.style_label_left, color = color.new(colBear, 100), textcolor = color.new(colBear, 10), size = size.tiny)
     if not na(lblPDL)
         label.delete(lblPDL)
     if drawLevels and usePoolPD and not na(pdl)
-        lblPDL := label.new(xT, pdl, f_lvlTxt("PDL", tPDL, srTouches), style = label.style_label_left, color = color.new(color.green, 100), textcolor = color.new(color.green, 10), size = size.tiny)
+        lblPDL := label.new(xT, pdl, f_lvlTxt("PDL", tPDL, srTouches), style = label.style_label_left, color = color.new(colBull, 100), textcolor = color.new(colBull, 10), size = size.tiny)
     if not na(lblPWH)
         label.delete(lblPWH)
     if drawLevels and usePoolPW and not na(pwh)
-        lblPWH := label.new(xT, pwh, f_lvlTxt("PWH", tPWH, srTouches), style = label.style_label_left, color = color.new(color.red, 100), textcolor = color.new(color.red, 10), size = size.tiny)
+        lblPWH := label.new(xT, pwh, f_lvlTxt("PWH", tPWH, srTouches), style = label.style_label_left, color = color.new(colBear, 100), textcolor = color.new(colBear, 10), size = size.tiny)
     if not na(lblPWL)
         label.delete(lblPWL)
     if drawLevels and usePoolPW and not na(pwl)
-        lblPWL := label.new(xT, pwl, f_lvlTxt("PWL", tPWL, srTouches), style = label.style_label_left, color = color.new(color.green, 100), textcolor = color.new(color.green, 10), size = size.tiny)
+        lblPWL := label.new(xT, pwl, f_lvlTxt("PWL", tPWL, srTouches), style = label.style_label_left, color = color.new(colBull, 100), textcolor = color.new(colBull, 10), size = size.tiny)
     if not na(lblLastH)
         label.delete(lblLastH)
     if drawLevels and usePoolSess and not na(lastSessHi)
-        lblLastH := label.new(xT, lastSessHi, f_lvlTxt(lastSessName + " H", tLstH, srTouches), style = label.style_label_left, color = color.new(color.red, 100), textcolor = color.new(color.red, 10), size = size.tiny)
+        lblLastH := label.new(xT, lastSessHi, f_lvlTxt(lastSessName + " H", tLstH, srTouches), style = label.style_label_left, color = color.new(colBear, 100), textcolor = color.new(colBear, 10), size = size.tiny)
     if not na(lblLastL)
         label.delete(lblLastL)
     if drawLevels and usePoolSess and not na(lastSessLo)
-        lblLastL := label.new(xT, lastSessLo, f_lvlTxt(lastSessName + " L", tLstL, srTouches), style = label.style_label_left, color = color.new(color.green, 100), textcolor = color.new(color.green, 10), size = size.tiny)
+        lblLastL := label.new(xT, lastSessLo, f_lvlTxt(lastSessName + " L", tLstL, srTouches), style = label.style_label_left, color = color.new(colBull, 100), textcolor = color.new(colBull, 10), size = size.tiny)
     if not na(lblAsiaH)
         label.delete(lblAsiaH)
     if showSessHL and not na(asiaH)
-        lblAsiaH := label.new(xT, asiaH, f_lvlTxt("Asia H", tAsH, srTouches), style = label.style_label_left, color = color.new(color.red, 100), textcolor = color.new(color.red, 10), size = size.tiny)
+        lblAsiaH := label.new(xT, asiaH, f_lvlTxt("Asia H", tAsH, srTouches), style = label.style_label_left, color = color.new(colBear, 100), textcolor = color.new(colBear, 10), size = size.tiny)
     if not na(lblAsiaL)
         label.delete(lblAsiaL)
     if showSessHL and not na(asiaL)
-        lblAsiaL := label.new(xT, asiaL, f_lvlTxt("Asia L", tAsL, srTouches), style = label.style_label_left, color = color.new(color.green, 100), textcolor = color.new(color.green, 10), size = size.tiny)
+        lblAsiaL := label.new(xT, asiaL, f_lvlTxt("Asia L", tAsL, srTouches), style = label.style_label_left, color = color.new(colBull, 100), textcolor = color.new(colBull, 10), size = size.tiny)
     if not na(lblLonH)
         label.delete(lblLonH)
     if showSessHL and not na(lonH)
-        lblLonH := label.new(xT, lonH, f_lvlTxt("London H", tLoH, srTouches), style = label.style_label_left, color = color.new(color.red, 100), textcolor = color.new(color.red, 10), size = size.tiny)
+        lblLonH := label.new(xT, lonH, f_lvlTxt("London H", tLoH, srTouches), style = label.style_label_left, color = color.new(colBear, 100), textcolor = color.new(colBear, 10), size = size.tiny)
     if not na(lblLonL)
         label.delete(lblLonL)
     if showSessHL and not na(lonL)
-        lblLonL := label.new(xT, lonL, f_lvlTxt("London L", tLoL, srTouches), style = label.style_label_left, color = color.new(color.green, 100), textcolor = color.new(color.green, 10), size = size.tiny)
+        lblLonL := label.new(xT, lonL, f_lvlTxt("London L", tLoL, srTouches), style = label.style_label_left, color = color.new(colBull, 100), textcolor = color.new(colBull, 10), size = size.tiny)
     if not na(lblNyH)
         label.delete(lblNyH)
     if showSessHL and not na(nyH)
-        lblNyH := label.new(xT, nyH, f_lvlTxt("NY H", tNyH, srTouches), style = label.style_label_left, color = color.new(color.red, 100), textcolor = color.new(color.red, 10), size = size.tiny)
+        lblNyH := label.new(xT, nyH, f_lvlTxt("NY H", tNyH, srTouches), style = label.style_label_left, color = color.new(colBear, 100), textcolor = color.new(colBear, 10), size = size.tiny)
     if not na(lblNyL)
         label.delete(lblNyL)
     if showSessHL and not na(nyL)
-        lblNyL := label.new(xT, nyL, f_lvlTxt("NY L", tNyL, srTouches), style = label.style_label_left, color = color.new(color.green, 100), textcolor = color.new(color.green, 10), size = size.tiny)
+        lblNyL := label.new(xT, nyL, f_lvlTxt("NY L", tNyL, srTouches), style = label.style_label_left, color = color.new(colBull, 100), textcolor = color.new(colBull, 10), size = size.tiny)
 
 // HTF trend candle coloring (green up / red down)
-candleCol = candleColorMode == "HTF Trend" ? (htfcUp ? color.new(color.green, 25) : htfcDn ? color.new(color.red, 25) : na) : candleColorMode == "Volume Pressure" ? (volPressUp ? color.new(color.green, 10) : volPressDn ? color.new(color.red, 10) : na) : na
+candleCol = candleColorMode == "HTF Trend" ? (htfcUp ? color.new(colBull, 25) : htfcDn ? color.new(colBear, 25) : na) : candleColorMode == "Volume Pressure" ? (volPressUp ? color.new(colBull, 10) : volPressDn ? color.new(colBear, 10) : na) : na
 barcolor(candleCol)
 
 // session shading — morning / noon per session, lunch hour left blank
@@ -867,8 +874,8 @@ inNyPM   = not na(time(timeframe.period, nyPM,   "GMT+0"))
 inLunch  = blankLunch and (not na(time(timeframe.period, asiaLunch, "GMT+0")) or not na(time(timeframe.period, lonLunch, "GMT+0")) or not na(time(timeframe.period, nyLunch, "GMT+0")))
 bgcolor(drawSess and inAsiaAM and not inLunch ? color.new(color.blue,   93) : na, title = "Asia morning")
 bgcolor(drawSess and inAsiaPM and not inLunch ? color.new(color.blue,   88) : na, title = "Asia noon")
-bgcolor(drawSess and inLonAM  and not inLunch ? color.new(color.green,  93) : na, title = "London morning")
-bgcolor(drawSess and inLonPM  and not inLunch ? color.new(color.green,  88) : na, title = "London noon")
+bgcolor(drawSess and inLonAM  and not inLunch ? color.new(colBull,  93) : na, title = "London morning")
+bgcolor(drawSess and inLonPM  and not inLunch ? color.new(colBull,  88) : na, title = "London noon")
 bgcolor(drawSess and inNyAM   and not inLunch ? color.new(color.orange, 93) : na, title = "New York morning")
 bgcolor(drawSess and inNyPM   and not inLunch ? color.new(color.orange, 88) : na, title = "New York noon")
 
@@ -883,7 +890,7 @@ if drawSess
     if inAsia and not inAsia[1]
         if not na(bigAsiaBox)
             box.delete(bigAsiaBox)
-        bigAsiaBox := box.new(bar_index, high, bar_index, low, border_color = na, bgcolor = na, text = "ASIA", text_color = color.new(color.blue, 55), text_size = size.huge, text_halign = text.align_center, text_valign = text.align_center)
+        bigAsiaBox := box.new(bar_index, high, bar_index, low, border_color = color.new(color.blue, 60), bgcolor = color.new(color.blue, 88), text = "ASIA", text_color = color.new(color.blue, 55), text_size = size.huge, text_halign = text.align_center, text_valign = text.align_center)
     else if inAsia and not na(bigAsiaBox)
         box.set_top(bigAsiaBox, math.max(box.get_top(bigAsiaBox), high))
         box.set_bottom(bigAsiaBox, math.min(box.get_bottom(bigAsiaBox), low))
@@ -891,7 +898,7 @@ if drawSess
     if inLon and not inLon[1]
         if not na(bigLonBox)
             box.delete(bigLonBox)
-        bigLonBox := box.new(bar_index, high, bar_index, low, border_color = na, bgcolor = na, text = "LONDON", text_color = color.new(color.green, 55), text_size = size.huge, text_halign = text.align_center, text_valign = text.align_center)
+        bigLonBox := box.new(bar_index, high, bar_index, low, border_color = color.new(colBull, 60), bgcolor = color.new(colBull, 88), text = "LONDON", text_color = color.new(colBull, 55), text_size = size.huge, text_halign = text.align_center, text_valign = text.align_center)
     else if inLon and not na(bigLonBox)
         box.set_top(bigLonBox, math.max(box.get_top(bigLonBox), high))
         box.set_bottom(bigLonBox, math.min(box.get_bottom(bigLonBox), low))
@@ -899,7 +906,7 @@ if drawSess
     if inNY and not inNY[1]
         if not na(bigNyBox)
             box.delete(bigNyBox)
-        bigNyBox := box.new(bar_index, high, bar_index, low, border_color = na, bgcolor = na, text = "NEW YORK", text_color = color.new(color.orange, 55), text_size = size.huge, text_halign = text.align_center, text_valign = text.align_center)
+        bigNyBox := box.new(bar_index, high, bar_index, low, border_color = color.new(color.orange, 60), bgcolor = color.new(color.orange, 88), text = "NEW YORK", text_color = color.new(color.orange, 55), text_size = size.huge, text_halign = text.align_center, text_valign = text.align_center)
     else if inNY and not na(bigNyBox)
         box.set_top(bigNyBox, math.max(box.get_top(bigNyBox), high))
         box.set_bottom(bigNyBox, math.min(box.get_bottom(bigNyBox), low))
@@ -917,19 +924,19 @@ var array<box> supFVGZones = array.new<box>()
 if showOB and obBull
     if demOBZones.size() >= obMaxKeep
         box.delete(demOBZones.shift())
-    demOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 70), border_width = 1, border_style = line.style_solid, text = "OB DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    demOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(colBull, 20), bgcolor = color.new(colBull, 70), border_width = 1, border_style = line.style_solid, text = "OB DEMAND", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
 if showOB and obBear
     if supOBZones.size() >= obMaxKeep
         box.delete(supOBZones.shift())
-    supOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 70), border_width = 1, border_style = line.style_solid, text = "OB SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    supOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(colBear, 20), bgcolor = color.new(colBear, 70), border_width = 1, border_style = line.style_solid, text = "OB SUPPLY", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBull
     if demFVGZones.size() >= fvgMaxKeep
         box.delete(demFVGZones.shift())
-    demFVGZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(color.green, 20), bgcolor = color.new(color.green, 78), border_width = 1, border_style = line.style_solid, text = "FVG DEMAND", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    demFVGZones.push(box.new(bar_index - 2, low, bar_index + 2, high[2], border_color = color.new(colBull, 20), bgcolor = color.new(colBull, 78), border_width = 1, border_style = line.style_solid, text = "FVG DEMAND", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBear
     if supFVGZones.size() >= fvgMaxKeep
         box.delete(supFVGZones.shift())
-    supFVGZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(color.red, 20), bgcolor = color.new(color.red, 78), border_width = 1, border_style = line.style_solid, text = "FVG SUPPLY", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+    supFVGZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(colBear, 20), bgcolor = color.new(colBear, 78), border_width = 1, border_style = line.style_solid, text = "FVG SUPPLY", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
 // Breaker blocks: an OB that gets genuinely CLOSED THROUGH (not just aged out)
 // flips into support/resistance in the opposite direction — real ICT concept.
 // Own bounded arrays + own aging/mitigation loop below (deleted once price
@@ -944,7 +951,7 @@ if demOBZones.size() > 0
             if brokenThru and showBreakers
                 if bearBreakers.size() >= breakerMaxKeep
                     box.delete(bearBreakers.shift())
-                bearBreakers.push(box.new(box.get_left(bd), box.get_top(bd), bar_index + 2, box.get_bottom(bd), border_color = color.new(color.red, 30), bgcolor = color.new(color.red, 85), border_width = 1, border_style = line.style_solid, text = "BREAKER", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+                bearBreakers.push(box.new(box.get_left(bd), box.get_top(bd), bar_index + 2, box.get_bottom(bd), border_color = color.new(colBear, 30), bgcolor = color.new(colBear, 85), border_width = 1, border_style = line.style_solid, text = "BREAKER", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
             box.delete(bd)
             demOBZones.remove(i)
         else
@@ -957,7 +964,7 @@ if supOBZones.size() > 0
             if brokenThru and showBreakers
                 if bullBreakers.size() >= breakerMaxKeep
                     box.delete(bullBreakers.shift())
-                bullBreakers.push(box.new(box.get_left(bs), box.get_top(bs), bar_index + 2, box.get_bottom(bs), border_color = color.new(color.green, 30), bgcolor = color.new(color.green, 85), border_width = 1, border_style = line.style_solid, text = "BREAKER", text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_center, text_valign = text.align_center))
+                bullBreakers.push(box.new(box.get_left(bs), box.get_top(bs), bar_index + 2, box.get_bottom(bs), border_color = color.new(colBull, 30), bgcolor = color.new(colBull, 85), border_width = 1, border_style = line.style_solid, text = "BREAKER", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
             box.delete(bs)
             supOBZones.remove(i)
         else
@@ -1004,7 +1011,7 @@ if armBullNow or armBearNow
     if not na(liqProjLbl)
         label.delete(liqProjLbl)
     float sweptPx = armBullNow ? swpLoPrice : swpHiPrice
-    color projCol = armBullNow ? color.new(color.green, 20) : color.new(color.red, 20)
+    color projCol = armBullNow ? color.new(colBull, 20) : color.new(colBear, 20)
     [projT, projN] = f_nextPool(armBullNow ? 1 : -1, sweptPx, pdh, pdl, pwh, pwl, lastSessHi, lastSessLo, lastSessName, asiaH, asiaL)
     if not na(projT)
         liqProjLn := line.new(bar_index, sweptPx, bar_index, projT, color = projCol, width = 2, style = line.style_dotted, extend = extend.none)
@@ -1030,38 +1037,38 @@ if showStructure and barstate.isconfirmed
         if structLines.size() >= structMaxKeep
             line.delete(structLines.shift())
             label.delete(structLabels.shift())
-        structLines.push(line.new(extPHBar, extPHVal, bar_index, extPHVal, color = color.new(color.green, 20), width = 1))
-        structLabels.push(label.new(math.round((extPHBar + bar_index) / 2), extPHVal, "BOS ▲", style = label.style_none, color = na, textcolor = color.new(color.green, 0), size = size.small))
+        structLines.push(line.new(extPHBar, extPHVal, bar_index, extPHVal, color = color.new(colBull, 20), width = 1))
+        structLabels.push(label.new(math.round((extPHBar + bar_index) / 2), extPHVal, "BOS ▲", style = label.style_none, color = na, textcolor = color.new(colBull, 0), size = size.small))
     if isBosDn
         if structLines.size() >= structMaxKeep
             line.delete(structLines.shift())
             label.delete(structLabels.shift())
-        structLines.push(line.new(extPLBar, extPLVal, bar_index, extPLVal, color = color.new(color.red, 20), width = 1))
-        structLabels.push(label.new(math.round((extPLBar + bar_index) / 2), extPLVal, "BOS ▼", style = label.style_none, color = na, textcolor = color.new(color.red, 0), size = size.small))
+        structLines.push(line.new(extPLBar, extPLVal, bar_index, extPLVal, color = color.new(colBear, 20), width = 1))
+        structLabels.push(label.new(math.round((extPLBar + bar_index) / 2), extPLVal, "BOS ▼", style = label.style_none, color = na, textcolor = color.new(colBear, 0), size = size.small))
     if isChochUp
         if structLines.size() >= structMaxKeep
             line.delete(structLines.shift())
             label.delete(structLabels.shift())
-        structLines.push(line.new(extPHBar, extPHVal, bar_index, extPHVal, color = color.new(color.green, 0), width = 3))
-        structLabels.push(label.new(math.round((extPHBar + bar_index) / 2), extPHVal, "CHoCH ▲", style = label.style_none, color = na, textcolor = color.new(color.green, 0), size = size.small))
+        structLines.push(line.new(extPHBar, extPHVal, bar_index, extPHVal, color = color.new(colBull, 0), width = 3))
+        structLabels.push(label.new(math.round((extPHBar + bar_index) / 2), extPHVal, "CHoCH ▲", style = label.style_none, color = na, textcolor = color.new(colBull, 0), size = size.small))
     if isChochDn
         if structLines.size() >= structMaxKeep
             line.delete(structLines.shift())
             label.delete(structLabels.shift())
-        structLines.push(line.new(extPLBar, extPLVal, bar_index, extPLVal, color = color.new(color.red, 0), width = 3))
-        structLabels.push(label.new(math.round((extPLBar + bar_index) / 2), extPLVal, "CHoCH ▼", style = label.style_none, color = na, textcolor = color.new(color.red, 0), size = size.small))
+        structLines.push(line.new(extPLBar, extPLVal, bar_index, extPLVal, color = color.new(colBear, 0), width = 3))
+        structLabels.push(label.new(math.round((extPLBar + bar_index) / 2), extPLVal, "CHoCH ▼", style = label.style_none, color = na, textcolor = color.new(colBear, 0), size = size.small))
     if isMssUp
         if structLines.size() >= structMaxKeep
             line.delete(structLines.shift())
             label.delete(structLabels.shift())
-        structLines.push(line.new(minPHBar, minPHVal, bar_index, minPHVal, color = color.new(color.green, 55), width = 1, style = line.style_dotted))
-        structLabels.push(label.new(math.round((minPHBar + bar_index) / 2), minPHVal, "MSS ▲", style = label.style_none, color = na, textcolor = color.new(color.green, 35), size = size.tiny))
+        structLines.push(line.new(minPHBar, minPHVal, bar_index, minPHVal, color = color.new(colBull, 55), width = 1, style = line.style_dotted))
+        structLabels.push(label.new(math.round((minPHBar + bar_index) / 2), minPHVal, "MSS ▲", style = label.style_none, color = na, textcolor = color.new(colBull, 35), size = size.tiny))
     if isMssDn
         if structLines.size() >= structMaxKeep
             line.delete(structLines.shift())
             label.delete(structLabels.shift())
-        structLines.push(line.new(minPLBar, minPLVal, bar_index, minPLVal, color = color.new(color.red, 55), width = 1, style = line.style_dotted))
-        structLabels.push(label.new(math.round((minPLBar + bar_index) / 2), minPLVal, "MSS ▼", style = label.style_none, color = na, textcolor = color.new(color.red, 35), size = size.tiny))
+        structLines.push(line.new(minPLBar, minPLVal, bar_index, minPLVal, color = color.new(colBear, 55), width = 1, style = line.style_dotted))
+        structLabels.push(label.new(math.round((minPLBar + bar_index) / 2), minPLVal, "MSS ▼", style = label.style_none, color = na, textcolor = color.new(colBear, 35), size = size.tiny))
 
 // ----- EQH / EQL: a horizontal tie-line between the two equal swings, name at
 // the midpoint — matches the BOS/CHoCH label-centering convention.
@@ -1072,14 +1079,14 @@ if showEQ and barstate.isconfirmed
         if eqLines.size() >= 10
             line.delete(eqLines.shift())
             label.delete(eqLabels.shift())
-        eqLines.push(line.new(eqhBar, eqhLvl, bar_index, eqhLvl, color = color.new(color.red, 20), width = 2, style = line.style_solid))
-        eqLabels.push(label.new(math.round((eqhBar + bar_index) / 2), eqhLvl, "EQH", style = label.style_none, color = na, textcolor = color.new(color.red, 0), size = size.small))
+        eqLines.push(line.new(eqhBar, eqhLvl, bar_index, eqhLvl, color = color.new(colBear, 20), width = 2, style = line.style_solid))
+        eqLabels.push(label.new(math.round((eqhBar + bar_index) / 2), eqhLvl, "EQH", style = label.style_none, color = na, textcolor = color.new(colBear, 0), size = size.small))
     if eqlNew
         if eqLines.size() >= 10
             line.delete(eqLines.shift())
             label.delete(eqLabels.shift())
-        eqLines.push(line.new(eqlBar, eqlLvl, bar_index, eqlLvl, color = color.new(color.green, 20), width = 2, style = line.style_solid))
-        eqLabels.push(label.new(math.round((eqlBar + bar_index) / 2), eqlLvl, "EQL", style = label.style_none, color = na, textcolor = color.new(color.green, 0), size = size.small))
+        eqLines.push(line.new(eqlBar, eqlLvl, bar_index, eqlLvl, color = color.new(colBull, 20), width = 2, style = line.style_solid))
+        eqLabels.push(label.new(math.round((eqlBar + bar_index) / 2), eqlLvl, "EQL", style = label.style_none, color = na, textcolor = color.new(colBull, 0), size = size.small))
 
 // ----- HH / HL / LL / LH tags, offset off the candle so they don't sit on the
 // horizontal BOS/CHoCH lines at the same price. Mechanical (not subjective).
@@ -1088,12 +1095,12 @@ if showSwingHL and barstate.isconfirmed
     if not na(extPH)
         if swingHLLabels.size() >= 20
             label.delete(swingHLLabels.shift())
-        color hiCol = hiSwingLabel == "HH" ? color.new(color.green, 0) : hiSwingLabel == "LH" ? color.new(color.red, 0) : color.new(color.gray, 30)
+        color hiCol = hiSwingLabel == "HH" ? color.new(colBull, 0) : hiSwingLabel == "LH" ? color.new(colBear, 0) : color.new(color.gray, 30)
         swingHLLabels.push(label.new(extPHBar, extPHVal, hiSwingLabel, style = label.style_none, yloc = yloc.abovebar, color = na, textcolor = hiCol, size = size.tiny))
     if not na(extPL)
         if swingHLLabels.size() >= 20
             label.delete(swingHLLabels.shift())
-        color loCol = loSwingLabel == "HL" ? color.new(color.green, 0) : loSwingLabel == "LL" ? color.new(color.red, 0) : color.new(color.gray, 30)
+        color loCol = loSwingLabel == "HL" ? color.new(colBull, 0) : loSwingLabel == "LL" ? color.new(colBear, 0) : color.new(color.gray, 30)
         swingHLLabels.push(label.new(extPLBar, extPLVal, loSwingLabel, style = label.style_none, yloc = yloc.belowbar, color = na, textcolor = loCol, size = size.tiny))
 
 // ----- CISD: line at the reference open, name at the confirmation (right end) -
@@ -1104,14 +1111,14 @@ if showCISD and barstate.isconfirmed
         if cisdLines.size() >= 20
             line.delete(cisdLines.shift())
             label.delete(cisdLabels.shift())
-        cisdLines.push(line.new(cisdBullBar, cisdBullLvl, bar_index, cisdBullLvl, color = color.new(color.green, 0), width = 2))
-        cisdLabels.push(label.new(bar_index, cisdBullLvl, "CISD", style = label.style_none, color = na, textcolor = color.new(color.green, 0), size = size.small))
+        cisdLines.push(line.new(cisdBullBar, cisdBullLvl, bar_index, cisdBullLvl, color = color.new(colBull, 0), width = 2))
+        cisdLabels.push(label.new(bar_index, cisdBullLvl, "CISD", style = label.style_none, color = na, textcolor = color.new(colBull, 0), size = size.small))
     if cisdBearConfirm
         if cisdLines.size() >= 20
             line.delete(cisdLines.shift())
             label.delete(cisdLabels.shift())
-        cisdLines.push(line.new(cisdBearBar, cisdBearLvl, bar_index, cisdBearLvl, color = color.new(color.red, 0), width = 2))
-        cisdLabels.push(label.new(bar_index, cisdBearLvl, "CISD", style = label.style_none, color = na, textcolor = color.new(color.red, 0), size = size.small))
+        cisdLines.push(line.new(cisdBearBar, cisdBearLvl, bar_index, cisdBearLvl, color = color.new(colBear, 0), width = 2))
+        cisdLabels.push(label.new(bar_index, cisdBearLvl, "CISD", style = label.style_none, color = na, textcolor = color.new(colBear, 0), size = size.small))
 
 // ----- price-action zigzag: connects the same external swings as BOS/CHoCH ---
 // Green = rising leg (up), red = falling leg (down) — the mechanical, non-
@@ -1124,14 +1131,14 @@ if showZigzag and barstate.isconfirmed
         if not na(zzLastVal)
             if zzLines.size() >= structMaxKeep
                 line.delete(zzLines.shift())
-            zzLines.push(line.new(zzLastBar, zzLastVal, extPHBar, extPHVal, color = extPHVal > zzLastVal ? color.new(color.green, 0) : color.new(color.red, 0), width = 2))
+            zzLines.push(line.new(zzLastBar, zzLastVal, extPHBar, extPHVal, color = extPHVal > zzLastVal ? color.new(colBull, 0) : color.new(colBear, 0), width = 2))
         zzLastVal := extPHVal
         zzLastBar := extPHBar
     if not na(extPL)
         if not na(zzLastVal)
             if zzLines.size() >= structMaxKeep
                 line.delete(zzLines.shift())
-            zzLines.push(line.new(zzLastBar, zzLastVal, extPLBar, extPLVal, color = extPLVal > zzLastVal ? color.new(color.green, 0) : color.new(color.red, 0), width = 2))
+            zzLines.push(line.new(zzLastBar, zzLastVal, extPLBar, extPLVal, color = extPLVal > zzLastVal ? color.new(colBull, 0) : color.new(colBear, 0), width = 2))
         zzLastVal := extPLVal
         zzLastBar := extPLBar
 
@@ -1148,8 +1155,8 @@ if showPremDisc and pdHasRange
     float oteTop = structTrend == 1 ? oteLongTop : oteShortTop
     float oteBot = structTrend == 1 ? oteLongBot : oteShortBot
     if na(pdPremBox)
-        pdPremBox := box.new(pdLeftBar, pdRangeTop, bar_index, pdEq, border_color = na, bgcolor = color.new(color.red, 88), text = "PREMIUM", text_color = color.new(color.red, 30), text_size = size.small, text_halign = text.align_right, text_valign = text.align_top)
-        pdDiscBox := box.new(pdLeftBar, pdEq, bar_index, pdRangeBot, border_color = na, bgcolor = color.new(color.green, 88), text = "DISCOUNT", text_color = color.new(color.green, 30), text_size = size.small, text_halign = text.align_right, text_valign = text.align_bottom)
+        pdPremBox := box.new(pdLeftBar, pdRangeTop, bar_index, pdEq, border_color = na, bgcolor = color.new(colBear, 88), text = "PREMIUM", text_color = color.new(colBear, 30), text_size = size.small, text_halign = text.align_right, text_valign = text.align_top)
+        pdDiscBox := box.new(pdLeftBar, pdEq, bar_index, pdRangeBot, border_color = na, bgcolor = color.new(colBull, 88), text = "DISCOUNT", text_color = color.new(colBull, 30), text_size = size.small, text_halign = text.align_right, text_valign = text.align_bottom)
         pdEqLine := line.new(pdLeftBar, pdEq, bar_index, pdEq, color = color.new(color.gray, 40), style = line.style_dashed, width = 1)
         pdEqLbl := label.new(bar_index, pdEq, "Equilibrium", style = label.style_none, color = na, textcolor = color.new(color.gray, 20), size = size.tiny)
         pdOteBox := box.new(pdLeftBar, oteTop, bar_index, oteBot, border_color = color.new(color.yellow, 30), bgcolor = color.new(color.yellow, 80), border_width = 1, border_style = line.style_solid, text = "OTE", text_color = color.new(color.yellow, 5), text_size = size.small, text_halign = text.align_left, text_valign = text.align_top)
@@ -1190,12 +1197,12 @@ if longSig or shortSig
     if not na(lbTP)
         label.delete(lbTP)
     int xR = bar_index + 5
-    bxSL := box.new(bar_index, math.max(entryP, slP), xR, math.min(entryP, slP), border_color = color.new(color.red, 50), bgcolor = color.new(color.red, 85))
-    bxTP := box.new(bar_index, math.max(entryP, tpP), xR, math.min(entryP, tpP), border_color = color.new(color.green, 50), bgcolor = color.new(color.green, 85))
+    bxSL := box.new(bar_index, math.max(entryP, slP), xR, math.min(entryP, slP), border_color = color.new(colBear, 50), bgcolor = color.new(colBear, 85))
+    bxTP := box.new(bar_index, math.max(entryP, tpP), xR, math.min(entryP, tpP), border_color = color.new(colBull, 50), bgcolor = color.new(colBull, 85))
     lnEnt := line.new(bar_index, entryP, xR, entryP, color = color.new(color.blue, 0), width = 2, style = line.style_dashed)
-    lbBadge := label.new(bar_index, entryP, (dir == 1 ? "BUY " : "SELL ") + (tgtMode == "Trail runner" ? "⛓ run" : "1:" + str.tostring(tradeRR, "#.#")), style = dir == 1 ? label.style_label_up : label.style_label_down, color = dir == 1 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor = color.white, size = size.small)
-    lbSL := label.new(xR, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(color.red, 10),   textcolor = color.white, size = size.small)
-    lbTP := label.new(xR, tpP, "TP " + str.tostring(tpP, "#.##"), style = label.style_label_left, color = color.new(color.green, 10), textcolor = color.white, size = size.small)
+    lbBadge := label.new(bar_index, entryP, (dir == 1 ? "BUY " : "SELL ") + (tgtMode == "Trail runner" ? "⛓ run" : "1:" + str.tostring(tradeRR, "#.#")), style = dir == 1 ? label.style_label_up : label.style_label_down, color = dir == 1 ? color.new(colBull, 0) : color.new(colBear, 0), textcolor = color.white, size = size.small)
+    lbSL := label.new(xR, slP, "SL " + str.tostring(slP, "#.##"), style = label.style_label_left, color = color.new(colBear, 10),   textcolor = color.white, size = size.small)
+    lbTP := label.new(xR, tpP, "TP " + str.tostring(tpP, "#.##"), style = label.style_label_left, color = color.new(colBull, 10), textcolor = color.white, size = size.small)
 else if inTrade and not na(bxSL)
     int xR = bar_index + 5
     box.set_right(bxSL, xR)
@@ -1207,12 +1214,12 @@ else if inTrade and not na(bxSL)
     label.set_text(lbSL, "SL " + str.tostring(slP, "#.##"))
     label.set_x(lbTP, xR)
 
-plotshape(sweepLoNow, "Swept low",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size = size.tiny)
-plotshape(sweepHiNow, "Swept high", shape.triangledown, location.abovebar, color.new(color.red, 0),   size = size.tiny)
-plotshape(longSig,  "BUY",  shape.labelup,   location.belowbar, color.new(color.green, 0), text = "BUY",  textcolor = color.white, size = size.small)
-plotshape(shortSig, "SELL", shape.labeldown, location.abovebar, color.new(color.red, 0),   text = "SELL", textcolor = color.white, size = size.small)
-plotshape(tpHit,    "TP",   shape.circle, location.belowbar, color.new(color.green, 0), size = size.tiny)
-plotshape(slHit,    "SL",   shape.xcross, location.abovebar, color.new(color.red, 0),   size = size.tiny)
+plotshape(sweepLoNow, "Swept low",  shape.triangleup,   location.belowbar, color.new(colBull, 0), size = size.tiny)
+plotshape(sweepHiNow, "Swept high", shape.triangledown, location.abovebar, color.new(colBear, 0),   size = size.tiny)
+plotshape(longSig,  "BUY",  shape.labelup,   location.belowbar, color.new(colBull, 0), text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(shortSig, "SELL", shape.labeldown, location.abovebar, color.new(colBear, 0),   text = "SELL", textcolor = color.white, size = size.small)
+plotshape(tpHit,    "TP",   shape.circle, location.belowbar, color.new(colBull, 0), size = size.tiny)
+plotshape(slHit,    "SL",   shape.xcross, location.abovebar, color.new(colBear, 0),   size = size.tiny)
 plotshape(exitEarly,"Exit", shape.square, location.abovebar, color.new(color.gray, 0),  size = size.tiny)
 
 // ============================== DASHBOARD ====================================
@@ -1222,11 +1229,11 @@ if showDash and barstate.islast
     cW = color.white
     sessTxt = inNY ? "New York" : inLon ? "London" : inAsia ? "Asia" : "—"
     liveHint = ((sweepLoNow or sweepHiNow) ? "⚡ sweeping" : inSession ? "forming" : "—") + "  " + (pressBull ? "▲press" : pressBear ? "▼press" : "") + (useNewsEntry and inNewsWindow ? "  📰news" : "")
-    expC = lastSessPhase == "Manip" ? color.new(color.green, 20) : lastSessPhase == "Accum" ? color.new(color.orange, 20) : color.new(color.gray, 30)
+    expC = lastSessPhase == "Manip" ? color.new(colBull, 20) : lastSessPhase == "Accum" ? color.new(color.orange, 20) : color.new(color.gray, 30)
     fStr =(requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireMom ? "M" + f_chk(momBull or momBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) + " " : "") + (requirePress ? "P" + f_chk(pressBull or pressBear) + " " : "") + (requireOTE ? "OTE" + f_chk(oteOkBull or oteOkBear) : "")
     fStr := fStr == "" ? "soft (none)" : fStr
     verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? (pendDir == 1 ? "⌛ wait retest ▲" : "⌛ wait retest ▼") : "WAIT"
-    verdictC= trigBull ? color.new(color.green, 0) : trigBear ? color.new(color.red, 0) : inTrade ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)
+    verdictC= trigBull ? color.new(colBull, 0) : trigBear ? color.new(colBear, 0) : inTrade ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)
     table.cell(dash, 0, 0, "APEX SESSION SMC (adaptive)", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
     table.merge_cells(dash, 0, 0, 1, 0)
     table.cell(dash, 0, 1, "Session", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
@@ -1240,9 +1247,9 @@ if showDash and barstate.islast
     table.cell(dash, 0, 5, "— ENTRY —", text_color = cW, bgcolor = color.new(color.gray, 60), text_size = size.small)
     table.merge_cells(dash, 0, 5, 1, 5)
     table.cell(dash, 0, 6, "Pool swept", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 6, (sweepLoNow or sweepHiNow ? "✓ " : "✗ ") + (sweepLoNow ? swLoName : sweepHiNow ? swHiName : ""), text_color = (sweepLoNow or sweepHiNow) ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 1, 6, (sweepLoNow or sweepHiNow ? "✓ " : "✗ ") + (sweepLoNow ? swLoName : sweepHiNow ? swHiName : ""), text_color = (sweepLoNow or sweepHiNow) ? colBull : colBear, text_size = size.small)
     table.cell(dash, 0, 7, "Candle", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 7, f_chk((bullConf or bearConf) and not isDoji) + " " + cndName, text_color = (bullConf or bearConf) ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 1, 7, f_chk((bullConf or bearConf) and not isDoji) + " " + cndName, text_color = (bullConf or bearConf) ? colBull : colBear, text_size = size.small)
     table.cell(dash, 0, 8, "Filters", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 8, fStr, text_color = cW, text_size = size.small)
     table.cell(dash, 0, 9, "VERDICT", text_color = cW, text_halign = text.align_left, text_size = size.small)
@@ -1262,10 +1269,10 @@ if showDash and barstate.islast
     table.cell(dash, 0, 16, "New York", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
     table.cell(dash, 1, 16, str.tostring(nA) + " / " + str.tostring(nM) + " / " + str.tostring(nD), text_color = cW, text_size = size.small)
     table.cell(dash, 0, 17, "Trades W% / PF", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-    table.cell(dash, 1, 17, str.tostring(nT) + " " + str.tostring(winRate, "#") + "% / " + str.tostring(pf, "#.##"), text_color = pf >= 1 ? color.green : color.red, text_size = size.small)
+    table.cell(dash, 1, 17, str.tostring(nT) + " " + str.tostring(winRate, "#") + "% / " + str.tostring(pf, "#.##"), text_color = pf >= 1 ? colBull : colBear, text_size = size.small)
     if showMTF
         table.cell(dash, 0, 18, "MTF 5·15·1h·4h·1D", text_color = color.gray, text_halign = text.align_left, text_size = size.small)
-        table.cell(dash, 1, 18, f_mtfArrow(mtf5t) + " " + f_mtfArrow(mtf15t) + " " + f_mtfArrow(mtf60t) + " " + f_mtfArrow(mtf240t) + " " + f_mtfArrow(mtfDt) + "  (" + str.tostring(mtfAgree) + "/5)", text_color = mtfAgree > 0 ? color.green : mtfAgree < 0 ? color.red : color.gray, text_size = size.small)
+        table.cell(dash, 1, 18, f_mtfArrow(mtf5t) + " " + f_mtfArrow(mtf15t) + " " + f_mtfArrow(mtf60t) + " " + f_mtfArrow(mtf240t) + " " + f_mtfArrow(mtfDt) + "  (" + str.tostring(mtfAgree) + "/5)", text_color = mtfAgree > 0 ? colBull : mtfAgree < 0 ? colBear : color.gray, text_size = size.small)
 
 // ============================== ALERTS =======================================
 if longSig

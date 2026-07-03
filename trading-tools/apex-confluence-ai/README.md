@@ -100,6 +100,20 @@ external swing range as Premium/Discount, drawn as a gold band and available as
 an optional entry filter (`requireOTE`) — a tighter refinement on top of the
 plain 50% Premium/Discount split.
 
+**Visual pass, matching the reference graphic:** every bullish/bearish element
+(OB/FVG/breaker boxes, structure lines, EQH/EQL, CISD, the zigzag, PDH/PDL)
+now uses the same muted TradingView/LuxAlgo-native hex colors as the reference
+(`#089981` / `#F23645`, via the `colBull`/`colBear` constants) instead of Pine's
+brighter built-in `color.green`/`color.red` — same up/down meaning, one
+consistent professional palette throughout. OB/FVG/breaker box text dropped
+from `size.small` to `size.tiny` so the label reads without dominating the box.
+The big session-name boxes (Asia/London/NY) now have a real, visible border +
+subtle fill sized to that session's own high/low, instead of just floating
+transparent watermark text with no boundary — closer to the reference's
+bounded killzone-box look. Session-identity colors (blue/green/orange for
+Asia/London/NY) are untouched by the palette swap on purpose — that's *which
+session*, not *which direction*.
+
 > **`ApexSessionSMC_Strategy.pine`** — the **Strategy-Tester** version, currently
 > **frozen** (not being developed further — the indicator above is the focus).
 > Same sessions/phases/sweep/retest/filters/execution (incl. the trailing runner and
