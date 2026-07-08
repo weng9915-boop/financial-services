@@ -1,6 +1,28 @@
 # Apex trading tools (XAUUSD) — Pine v6
 
-## ⭐⭐ Flagship: `ApexSessionSMC.pine` — Apex Session SMC (adaptive phases)
+## ⭐⭐ Flagship: `ApexSessionSMC.pine` — Apex Session SMC + Deeper-Pool Guard
+
+> **Reconciled to the "Deeper-Pool Guard" (DPG) evolution** — the version that
+> tested best on the 15m chart. On top of everything below, it adds: a
+> **confluence SCORE** (`minScore`, one dial 0-21) that replaces most hard
+> filters — pool importance, phase alignment, SMT, OTE, RSI divergence, volume
+> climax, VWAP value-area, displacement-FVG, CISD/MSS, killzone/Silver-Bullet
+> timing, MTF majority, and breaker-block overlap ("unicorn") all add points
+> instead of each being a yes/no gate; a **deeper-pool pullback guard**
+> (`useDeeperGuard`, on by default) — if a deeper untaken pool sits beyond the
+> swept level within a search radius, the retest must reach *that* level and
+> the stop anchors to it, fixing setups whose SL was getting raided by a
+> pool the naive stop never accounted for; a **Strict ICT mode**
+> (manipulation → displacement → FVG-retrace, as a hard sequence) as an
+> alternative to the default classic swept-level retest; **CRT pools** (prior
+> 1H/4H candle H/L), **Silver Bullet windows**, and **trade-day filters**
+> (skip Mondays / auto-detected NFP Friday / manual news-date list — now
+> actually wired into arming *and* entry, not just computed and left unused).
+> Fixed during reconciliation: the trade-day filter existed as an input group
+> with real tooltips but was never connected to any entry condition — `avoidNFP`
+> defaulted to true, so anyone relying on it was **not** actually skipping NFP
+> days. It now gates both `armBullNow`/`armBearNow` and the final `trigBull`/
+> `trigBear`.
 
 **Phases are not hard-wired to sessions.** Asia isn't always accumulation; any
 session can accumulate, manipulate, or distribute. So the tool *detects* it
