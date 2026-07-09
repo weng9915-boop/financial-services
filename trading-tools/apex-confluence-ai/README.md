@@ -24,6 +24,45 @@
 > days. It now gates both `armBullNow`/`armBearNow` and the final `trigBull`/
 > `trigBear`.
 
+> **Key-levels expansion** (Monthly pools, volume-ranked sweeps, OB scoring, HTF
+> FVGs) — four additions in direct service of the stated goal ("setup at key
+> levels / major S/R for high RR"):
+> - **Monthly key levels + D/W/M opens** (`usePoolPM`, `showOpens`): previous
+>   month H/L (`pmh`/`pml`) joins PD/PW as a sweep pool and TP target — scored in
+>   the same "major pool" tier as PD/PW/4H-CRT, since a monthly swing is a far
+>   heavier magnet than a session or weekly one. The current Day/Week/Month
+>   **open** is drawn as a separate reference line (gray/orange/purple) — purely
+>   informational bias context, not a pool.
+> - **Volume-weighted major/minor sweep rank** (`majorSweepThresh`): the sweep
+>   bar's volume is classified by **percentile rank over the last 100 bars**
+>   (`ta.percentrank`) rather than a flat multiple-of-average — "was this bar's
+>   volume actually unusual for this instrument recently," not just a fixed
+>   ratio. Replaces the flat volume-climax check inside the confluence score
+>   specifically (the Volume Pressure candle-coloring display is untouched); the
+>   dashboard verdict tags a pending setup `[MAJOR]`/`[minor]` so the
+>   classification is visually confirmable while a setup waits for retest.
+> - **OB probability score + HPZ tier** (`showOBScore`): every order block is
+>   scored 0-100 — a body-momentum z-score blended with a volume-percentile
+>   read (mirrors LuxAlgo's MSB & OB Toolkit) — printed right in the box text
+>   ("OB DEMAND 82%"). Scores above 80 are a **High-Probability Zone**: a
+>   brighter accent color (`HPZ_BULL`/`HPZ_BEAR`) + thicker border + a ★HPZ tag.
+>   Visual/informational tier only — deliberately **not** wired into the
+>   confluence score, since scoring "does a live setup sit inside a high-scoring
+>   OB" would need a parallel array kept in sync across both the aging and the
+>   breaker-conversion eviction paths, too bug-prone for a label.
+> - **HTF (1H/4H) fair value gaps** (`showHtfFVG`): the same 3-candle imbalance
+>   test as the chart-timeframe FVGs, evaluated on the 1H/4H series via
+>   `request.security` (shifted by `[1]`/`[3]` instead of `[0]`/`[2]` so it only
+>   ever reads a fully closed HTF candle, never the still-forming one — the same
+>   non-repaint idiom as the CRT pools). Drawn with a dashed border to
+>   distinguish them from same-timeframe zones at a glance. Same tier as the
+>   same-timeframe FVGs — informational key levels, not a sweep pool or TP
+>   target.
+>
+> `max_boxes_count` raised **150 → 200** for the new HTF-FVG box arrays — at
+> every slider pushed to its maximum simultaneously, the box budget now needs
+> 161 (was already 129 before this batch), so 150 no longer had headroom.
+
 **Phases are not hard-wired to sessions.** Asia isn't always accumulation; any
 session can accumulate, manipulate, or distribute. So the tool *detects* it
 instead of assuming it:
@@ -65,10 +104,11 @@ size tops out at a fixed "huge," but the box itself literally grows/shrinks with
 the session); the **last Asia / London / NY high-low** (the liquidity pools) each
 with a **small name tag** at the right edge — nothing to guess; and **order blocks
 + FVGs drawn as filled, labeled boxes** ("OB DEMAND" / "OB SUPPLY" / "FVG DEMAND" /
-"FVG SUPPLY") that **auto-delete** when price invalidates them. OB and FVG each
-have their **own separate budget** (`obMaxKeep` / `fvgMaxKeep`) — on fast
-timeframes FVGs form far more often than order blocks, and sharing one budget let
-FVGs silently evict OB boxes that hadn't actually invalidated. FVG also has a
+"FVG SUPPLY") that **auto-delete** when price invalidates them. OB, same-timeframe
+FVG, and HTF FVG each have their **own separate budget** (`obMaxKeep` /
+`fvgMaxKeep` / `htfFvgMaxKeep`) — on fast timeframes FVGs form far more often
+than order blocks, and sharing one budget let FVGs silently evict OB boxes that
+hadn't actually invalidated. FVG also has a
 **minimum gap size filter** (`fvgMinAtr`) so trivial 1m imbalances don't stack
 into an unreadable pile. A **liquidity-direction projection**
 (dotted line + 🎯 target tag) is drawn the moment a sweep arms, pointing at the

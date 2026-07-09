@@ -40,7 +40,7 @@
 // =============================================================================
 
 indicator("Apex Session SMC + Deeper-Pool Guard [XAUUSD]", "ApexSMC-DPG", overlay = true,
-     max_boxes_count = 150, max_lines_count = 200, max_labels_count = 200, max_bars_back = 500)
+     max_boxes_count = 200, max_lines_count = 200, max_labels_count = 200, max_bars_back = 500)
 
 // TradingView/LuxAlgo-native palette (matches the reference graphic) — replaces
 // Pine's brighter built-in colBull/colBear everywhere below, same up/down
@@ -48,6 +48,11 @@ indicator("Apex Session SMC + Deeper-Pool Guard [XAUUSD]", "ApexSMC-DPG", overla
 // orange for Asia/London/NY) are untouched — that's identity, not direction.
 color colBull = #089981
 color colBear = #F23645
+// Brighter accent pair reserved for High-Probability-Zone order blocks only
+// (obScore > 80) — same bull/red-family meaning, just a hotter shade to mark
+// the elevated tier. Matches the LuxAlgo MSB & OB Toolkit's HPZ convention.
+color HPZ_BULL = #1de9b6
+color HPZ_BEAR = #ff5252
 
 // ============================== HELPERS ======================================
 f_swLo(float p) => not na(p) and close[1] >= p and low  < p and close > p   // was above, raided below, reclaimed
@@ -110,7 +115,7 @@ f_nextPool(int d, float px, float _pdh, float _pdl, float _pwh, float _pwl, floa
 // (session/PD/PW/Asia), bounded by maxDist so this can't wander off chasing a
 // level that was never realistically in play. Explicit params (not closures)
 // to match this file's existing helper convention (see f_nextPool above).
-f_deeperPool(int d, float refLvl, float maxDist, float _pdh, float _pdl, float _pwh, float _pwl, float _lastHi, float _lastLo, float _asiaH, float _asiaL) =>
+f_deeperPool(int d, float refLvl, float maxDist, float _pdh, float _pdl, float _pwh, float _pwl, float _lastHi, float _lastLo, float _asiaH, float _asiaL, float _pmh, float _pml) =>
     float best = na
     if d == 1
         if not na(_asiaL) and _asiaL <= refLvl and refLvl - _asiaL <= maxDist
@@ -121,6 +126,8 @@ f_deeperPool(int d, float refLvl, float maxDist, float _pdh, float _pdl, float _
             best := na(best) ? _pwl : math.min(best, _pwl)
         if not na(_lastLo) and _lastLo <= refLvl and refLvl - _lastLo <= maxDist
             best := na(best) ? _lastLo : math.min(best, _lastLo)
+        if not na(_pml) and _pml <= refLvl and refLvl - _pml <= maxDist
+            best := na(best) ? _pml : math.min(best, _pml)
     else
         if not na(_asiaH) and _asiaH >= refLvl and _asiaH - refLvl <= maxDist
             best := na(best) ? _asiaH : math.max(best, _asiaH)
@@ -130,6 +137,8 @@ f_deeperPool(int d, float refLvl, float maxDist, float _pdh, float _pdl, float _
             best := na(best) ? _pwh : math.max(best, _pwh)
         if not na(_lastHi) and _lastHi >= refLvl and _lastHi - refLvl <= maxDist
             best := na(best) ? _lastHi : math.max(best, _lastHi)
+        if not na(_pmh) and _pmh >= refLvl and _pmh - refLvl <= maxDist
+            best := na(best) ? _pmh : math.max(best, _pmh)
     best
 f_lvlTxt(string nm, int touches, int strongAt) =>
     nm + (touches > 0 ? " ×" + str.tostring(touches) : "") + (touches >= strongAt ? " ✓" : "")
@@ -175,6 +184,7 @@ usePoolSess = input.bool(true, "Pool: last completed session H/L", group = gE)
 usePoolPD   = input.bool(true, "Pool: prev day H/L", group = gE)
 usePoolPW   = input.bool(true, "Pool: prev week H/L", group = gE)
 usePoolAsia = input.bool(true, "Pool: today's Asia H/L", group = gE)
+usePoolPM   = input.bool(true, "Pool: prev month H/L", group = gE, tooltip = "The most major key level this system tracks — a monthly swing is a far heavier magnet than a session or even a weekly one. Scored in the same 'major pool' tier as PD/PW/4H-CRT.")
 usePoolCRT  = input.bool(false, "Pool: prior 1H / 4H candle H/L (CRT)", group = gE, tooltip = "Candle Range Theory at candle scale: the PREVIOUS 1-hour / 4-hour candle's high/low. OFF by default after backtesting: prior-1H levels get raided constantly on LTF gold, flooding the system with noise arms — and (worse) they were triggering the opposite-sweep fail-exit on healthy winners. Even when enabled, CRT raids no longer trigger the fail-exit. 4H sweep = major pool (+2 score), 1H = minor (+1).")
 usePoolEQ   = input.bool(false, "Pool: Equal Highs/Lows (EQH/EQL)", group = gE, tooltip = "Two major swing highs (or lows) within a tight tolerance = a real EQH/EQL pool. OFF by default: in the best-performing configuration this pool was effectively inactive (a legacy bug quietly disabled it), and activating it added minor-swing noise trades. Enable deliberately and re-test — don't assume.")
 eqTol       = input.float(0.25, "  EQH/EQL tolerance × ATR", minval = 0.05, step = 0.05, group = gE)
@@ -200,6 +210,7 @@ srLook    = input.int(50, "  Touch lookback (bars)", minval = 5, maxval = 480, g
 srTol     = input.float(0.4, "  Touch tolerance × ATR", minval = 0.05, step = 0.05, group = gX)
 requirePress = input.bool(false, "Require net pressure agrees", group = gX, tooltip = "Only take longs when up-displacement > down-displacement over the look-back (buyers pushing harder), and vice-versa. Your 'more seller / more demand' read, as a hard filter.")
 requireOTE   = input.bool(false, "Require entry within OTE (61.8-78.6% fib) zone", group = gX, tooltip = "Optimal Trade Entry — the classic ICT 'golden ratio' pullback zone. Off as a HARD gate (the backtest comparison showed it cut too many setups); it still earns +1 in the confluence score when present.")
+majorSweepThresh = input.float(70, "Major sweep = volume percentile ≥", minval = 50, maxval = 99, group = gX, tooltip = "Classifies the sweep bar's volume against its own percentile rank over the last 100 bars, instead of a flat multiple-of-average threshold — a real 'was this a genuine stop-hunt or just quiet drift through the level' read. Feeds the confluence score in place of the old flat-multiple volume-climax check; shown on the dashboard as MAJOR/minor next to the swept pool.")
 
 // ============================== CONFLUENCE SCORE =============================
 gC = "③b Confluence score — ONE dial for frequency ↔ quality"
@@ -234,15 +245,19 @@ htfColorTF = input.timeframe("60", "  HTF for candle color", group = gD)
 volColorMult = input.float(1.5, "  Volume Pressure: min rel-volume ×", minval = 0.5, step = 0.1, group = gD)
 showOB     = input.bool(true, "Draw order blocks (auto-delete on invalidation)", group = gD)
 obMaxKeep  = input.int(15, "  Max order blocks kept on chart", minval = 3, maxval = 25, group = gD, tooltip = "OB has its OWN budget, separate from FVG — a burst of FVGs can no longer push order blocks off the chart.")
+showOBScore = input.bool(true, "  Show OB probability score + HPZ tier", group = gD, tooltip = "Body-momentum z-score + volume-percentile blend, 0-100 (mirrors LuxAlgo's MSB & OB Toolkit). >80 = High-Probability Zone: brighter box + ★HPZ tag. Visual/informational only — NOT wired into the confluence score.")
 showFVG    = input.bool(true, "Draw fair value gaps (auto-delete on fill)", group = gD)
 fvgMinAtr  = input.float(0.15, "  Min FVG gap size × ATR", minval = 0, step = 0.05, group = gD, tooltip = "On 1m gold, tiny 3-candle imbalances form constantly and stack up into an unreadable pile of boxes. This requires the gap to be at least this fraction of ATR before it's drawn — raise it to only show meaningful FVGs.")
 fvgMaxKeep = input.int(8, "  Max FVGs kept on chart", minval = 2, maxval = 15, group = gD, tooltip = "FVGs form far more often than order blocks, so a smaller, separate cap keeps only the most recent/relevant ones instead of a stack of overlapping boxes.")
+showHtfFVG = input.bool(true, "Draw HTF (1H/4H) fair value gaps", group = gD, tooltip = "Same 3-candle imbalance test as the chart-timeframe FVGs above, evaluated on the 1H and 4H series instead — a higher-timeframe key level, same 'major pool' tier as the CRT candle range. Informational/visual only, not wired as a sweep pool or TP target.")
+htfFvgMaxKeep = input.int(4, "  Max HTF FVGs kept on chart (each of 1H/4H)", minval = 2, maxval = 8, group = gD)
 showBreakers  = input.bool(true, "Draw breaker blocks (invalidated OB flips to opposite S/R)", group = gD, tooltip = "When an order block gets closed through (invalidated), it flips into support/resistance in the OPPOSITE direction — a real ICT concept, distinct from a fresh OB.")
 breakerMaxKeep = input.int(8, "  Max breaker blocks kept on chart", minval = 2, maxval = 20, group = gD)
 zoneMaxAge = input.int(120, "  Zone max age (bars)", minval = 10, group = gD)
 showSessHL = input.bool(true, "Show last Asia / London / NY high-low", group = gD)
 pressLen   = input.int(20, "Pressure look-back (up vs down displacement)", minval = 2, group = gD, tooltip = "Sums the size of up-moves vs down-moves over N bars. If sellers pushed 6 while buyers pushed 3, net pressure is DOWN — the read you described. Shown on the dashboard; add it as a filter in Extra confirmations.")
 showMTF    = input.bool(true, "Show multi-timeframe confluence row (5m/15m/1h/4h/1D)", group = gD, tooltip = "At-a-glance: does price sit above/below its own 50-EMA on each higher timeframe? Purely informational, not wired to entries — just how many timeframes currently agree.")
+showOpens  = input.bool(true, "Draw Daily / Weekly / Monthly open lines", group = gD, tooltip = "Informational only, not a sweep pool or TP target — just the reference price many desks use for intraday bias (above the day's open = buyers in control so far, and so on for the week/month).")
 
 // ============================== ⑥ SESSION SHADING ===========================
 gV = "⑥ Session shading (UTC)"
@@ -278,12 +293,51 @@ pdh = request.security(syminfo.tickerid, "D", high[1],  lookahead = barmerge.loo
 pdl = request.security(syminfo.tickerid, "D", low[1],   lookahead = barmerge.lookahead_on)
 pwh = request.security(syminfo.tickerid, "W", high[1],  lookahead = barmerge.lookahead_on)
 pwl = request.security(syminfo.tickerid, "W", low[1],   lookahead = barmerge.lookahead_on)
+pmh = request.security(syminfo.tickerid, "M", high[1],  lookahead = barmerge.lookahead_on)
+pml = request.security(syminfo.tickerid, "M", low[1],   lookahead = barmerge.lookahead_on)
+
+// current Daily/Weekly/Monthly OPEN — fixed the instant each period starts, so
+// tracking it directly off the chart's own bars (like the session opens above)
+// is simplest and non-repainting; no request.security needed for a value that
+// doesn't change once set.
+var float dOpenV = na
+var float wOpenV = na
+var float mOpenV = na
+newWeekChg  = timeframe.change("W")
+newMonthChg = timeframe.change("M")
+if timeframe.change("D")
+    dOpenV := open
+if newWeekChg
+    wOpenV := open
+if newMonthChg
+    mOpenV := open
 
 // CRT pools: prior 1H / 4H candle high & low (Candle Range Theory / Po3 at candle scale)
 h1H = request.security(syminfo.tickerid, "60",  high[1], lookahead = barmerge.lookahead_on)
 h1L = request.security(syminfo.tickerid, "60",  low[1],  lookahead = barmerge.lookahead_on)
 h4H = request.security(syminfo.tickerid, "240", high[1], lookahead = barmerge.lookahead_on)
 h4L = request.security(syminfo.tickerid, "240", low[1],  lookahead = barmerge.lookahead_on)
+
+// HTF (1H/4H) fair value gaps — the same 3-candle imbalance test as fvgBull/
+// fvgBear below, evaluated on the 60/240 series and shifted by [1]/[3] instead
+// of [0]/[2] so it always reads the last FULLY CLOSED HTF 3-candle window,
+// never the still-forming HTF bar — same non-repaint idiom as h1H/h1L/h4H/h4L
+// just above. Informational/visual key levels only, same tier as the same-
+// timeframe FVGs already drawn — not wired as a sweep pool or TP target.
+newH1Bar = timeframe.change("60")
+newH4Bar = timeframe.change("240")
+h1L1 = request.security(syminfo.tickerid, "60",  low[1],  lookahead = barmerge.lookahead_on)
+h1H3 = request.security(syminfo.tickerid, "60",  high[3], lookahead = barmerge.lookahead_on)
+h1H1 = request.security(syminfo.tickerid, "60",  high[1], lookahead = barmerge.lookahead_on)
+h1L3 = request.security(syminfo.tickerid, "60",  low[3],  lookahead = barmerge.lookahead_on)
+h4L1 = request.security(syminfo.tickerid, "240", low[1],  lookahead = barmerge.lookahead_on)
+h4H3 = request.security(syminfo.tickerid, "240", high[3], lookahead = barmerge.lookahead_on)
+h4H1 = request.security(syminfo.tickerid, "240", high[1], lookahead = barmerge.lookahead_on)
+h4L3 = request.security(syminfo.tickerid, "240", low[3],  lookahead = barmerge.lookahead_on)
+fvgBull1H = h1L1 > h1H3 and (h1L1 - h1H3) >= fvgMinAtr * atr
+fvgBear1H = h1H1 < h1L3 and (h1L3 - h1H1) >= fvgMinAtr * atr
+fvgBull4H = h4L1 > h4H3 and (h4L1 - h4H3) >= fvgMinAtr * atr
+fvgBear4H = h4H1 < h4L3 and (h4L3 - h4H1) >= fvgMinAtr * atr
 
 // optional HTF bias
 htfClose = request.security(syminfo.tickerid, biasTF, close[barstate.isrealtime ? 1 : 0], lookahead = barmerge.lookahead_off)
@@ -515,6 +569,19 @@ dispUp = close - open > atr
 dispDn = open - close > atr
 obBull = dispUp and close[1] < open[1]   // last down candle before an up impulse = demand
 obBear = dispDn and close[1] > open[1]   // last up candle before a down impulse = supply
+
+// ----- OB probability score (visual/informational tier only — see showOBScore
+// tooltip). Body-momentum z-score (how big was this impulse candle vs its own
+// recent normal) blended with a volume-percentile read, same shape as the
+// Deeper-Pool Guard's isMajorSweepVol classification above but scored 0-100
+// instead of a simple boolean. NOT wired into the confluence score: overlap-
+// checking which OB a live setup sits inside would need a parallel array kept
+// in sync across both the aging AND breaker-conversion eviction paths, too
+// bug-prone for a purely informational tier label.
+obMomZ   = (bodyC - ta.sma(bodyC, 50)) / ta.stdev(bodyC, 50)
+obVolPct = ta.percentrank(volume, 100)
+obScore  = math.min(100.0, math.abs(obMomZ) * 20 + obVolPct * 0.5)
+obIsHPZ  = obScore > 80
 fvgBull = low > high[2] and (low - high[2]) >= fvgMinAtr * atr   // 3-candle imbalance up, meaningful size only
 fvgBear = high < low[2] and (low[2] - high) >= fvgMinAtr * atr   // 3-candle imbalance down, meaningful size only
 swingLoN = ta.lowest(low,  slSwingLook)   // recent liquidity below (for SL beyond the sweep)
@@ -605,14 +672,14 @@ oteOkBull = pdHasRange and close <= oteLongTop and close >= oteLongBot
 oteOkBear = pdHasRange and close <= oteShortTop and close >= oteShortBot
 
 // ----- liquidity sweep (the manipulation, in real time) ----------------------
-sweepLoNow = (usePoolSess and f_swLo(lastSessLo)) or (usePoolPD and f_swLo(pdl)) or (usePoolPW and f_swLo(pwl)) or (usePoolAsia and f_swLo(asiaL)) or (usePoolEQ and not eqlSwept and f_swLo(eqlLvl))
-sweepHiNow = (usePoolSess and f_swHi(lastSessHi)) or (usePoolPD and f_swHi(pdh)) or (usePoolPW and f_swHi(pwh)) or (usePoolAsia and f_swHi(asiaH)) or (usePoolEQ and not eqhSwept and f_swHi(eqhLvl))
+sweepLoNow = (usePoolSess and f_swLo(lastSessLo)) or (usePoolPD and f_swLo(pdl)) or (usePoolPW and f_swLo(pwl)) or (usePoolAsia and f_swLo(asiaL)) or (usePoolEQ and not eqlSwept and f_swLo(eqlLvl)) or (usePoolPM and f_swLo(pml))
+sweepHiNow = (usePoolSess and f_swHi(lastSessHi)) or (usePoolPD and f_swHi(pdh)) or (usePoolPW and f_swHi(pwh)) or (usePoolAsia and f_swHi(asiaH)) or (usePoolEQ and not eqhSwept and f_swHi(eqhLvl)) or (usePoolPM and f_swHi(pmh))
 if usePoolEQ and not eqlSwept and f_swLo(eqlLvl)
     eqlSwept := true
 if usePoolEQ and not eqhSwept and f_swHi(eqhLvl)
     eqhSwept := true
-swLoName = (usePoolSess and f_swLo(lastSessLo)) ? lastSessName + "·L" : (usePoolPD and f_swLo(pdl)) ? "PDL" : (usePoolPW and f_swLo(pwl)) ? "PWL" : (usePoolAsia and f_swLo(asiaL)) ? "Asia·L" : (usePoolEQ and f_swLo(eqlLvl)) ? "EQL" : "—"
-swHiName = (usePoolSess and f_swHi(lastSessHi)) ? lastSessName + "·H" : (usePoolPD and f_swHi(pdh)) ? "PDH" : (usePoolPW and f_swHi(pwh)) ? "PWH" : (usePoolAsia and f_swHi(asiaH)) ? "Asia·H" : (usePoolEQ and f_swHi(eqhLvl)) ? "EQH" : "—"
+swLoName = (usePoolSess and f_swLo(lastSessLo)) ? lastSessName + "·L" : (usePoolPD and f_swLo(pdl)) ? "PDL" : (usePoolPW and f_swLo(pwl)) ? "PWL" : (usePoolPM and f_swLo(pml)) ? "PML" : (usePoolAsia and f_swLo(asiaL)) ? "Asia·L" : (usePoolEQ and f_swLo(eqlLvl)) ? "EQL" : "—"
+swHiName = (usePoolSess and f_swHi(lastSessHi)) ? lastSessName + "·H" : (usePoolPD and f_swHi(pdh)) ? "PDH" : (usePoolPW and f_swHi(pwh)) ? "PWH" : (usePoolPM and f_swHi(pmh)) ? "PMH" : (usePoolAsia and f_swHi(asiaH)) ? "Asia·H" : (usePoolEQ and f_swHi(eqhLvl)) ? "EQH" : "—"
 
 // ----- SMT divergence: a correlated market fails to confirm the new extreme ---
 smtRefLow  = request.security(smtSym, timeframe.period, low,  lookahead = barmerge.lookahead_off)
@@ -639,6 +706,14 @@ rsiV = ta.rsi(close, 14)
 rsiBullDiv = gLL and rsiV > ta.lowest(rsiV, smtLen)[1]
 rsiBearDiv = gHH and rsiV < ta.highest(rsiV, smtLen)[1]
 volClimax = relVolC >= volColorMult
+// major-vs-minor sweep classification by volume PERCENTILE RANK (over the last
+// 100 bars) rather than a flat multiple-of-average — a real "was this bar's
+// volume actually unusual for this instrument recently" read, not just a
+// fixed ratio. Replaces volClimax specifically in the confluence score below;
+// volClimax itself is untouched and still drives the separate Volume Pressure
+// candle-coloring display.
+sweepVolRank = ta.percentrank(volume, 100)
+isMajorSweepVol = sweepVolRank >= majorSweepThresh
 
 // ----- market structure: BOS (continuation) / CHoCH (reversal) / MSS (minor) --
 // Independent of the entry/filter logic above — purely informational annotation.
@@ -725,6 +800,7 @@ var int   nW = 0
 var float grW = 0.0
 var float grL = 0.0
 var bool  entryGuardFired = false   // did THIS trade's setup wait for/anchor to a deeper untaken pool?
+var bool  pendMajorVol = false   // was the sweep bar's volume a MAJOR (percentile-ranked) sweep?
 
 cooled = na(lastExitBar) or bar_index - lastExitBar >= cooldownBars
 
@@ -737,8 +813,8 @@ exitEarly = false
 // ----- 2-stage retest flow: arm on the sweep, enter on the retest close ------
 // EQ pools included here too — sweepLoNow/sweepHiNow can fire on an EQH/EQL
 // sweep alone, and the retest state needs a real zLvl for it, not na.
-swpLoPrice = (usePoolSess and f_swLo(lastSessLo)) ? lastSessLo : (usePoolPD and f_swLo(pdl)) ? pdl : (usePoolPW and f_swLo(pwl)) ? pwl : (usePoolAsia and f_swLo(asiaL)) ? asiaL : (usePoolEQ and f_swLo(eqlLvl)) ? eqlLvl : na
-swpHiPrice = (usePoolSess and f_swHi(lastSessHi)) ? lastSessHi : (usePoolPD and f_swHi(pdh)) ? pdh : (usePoolPW and f_swHi(pwh)) ? pwh : (usePoolAsia and f_swHi(asiaH)) ? asiaH : (usePoolEQ and f_swHi(eqhLvl)) ? eqhLvl : na
+swpLoPrice = (usePoolSess and f_swLo(lastSessLo)) ? lastSessLo : (usePoolPD and f_swLo(pdl)) ? pdl : (usePoolPW and f_swLo(pwl)) ? pwl : (usePoolPM and f_swLo(pml)) ? pml : (usePoolAsia and f_swLo(asiaL)) ? asiaL : (usePoolEQ and f_swLo(eqlLvl)) ? eqlLvl : na
+swpHiPrice = (usePoolSess and f_swHi(lastSessHi)) ? lastSessHi : (usePoolPD and f_swHi(pdh)) ? pdh : (usePoolPW and f_swHi(pwh)) ? pwh : (usePoolPM and f_swHi(pmh)) ? pmh : (usePoolAsia and f_swHi(asiaH)) ? asiaH : (usePoolEQ and f_swHi(eqhLvl)) ? eqhLvl : na
 strongLo = f_touches(swpLoPrice, srTol * atr, srLook) >= srTouches
 strongHi = f_touches(swpHiPrice, srTol * atr, srLook) >= srTouches
 armBullNow = sweepLoNow and inSessionOK and tradeDayOK and (not requireBias or biasBull) and (not requireChoch or chochArmBull) and (not requireSMT or smtBull) and (not useStrongSR or strongLo) and (not requirePress or pressBull) and (not requireOTE or oteOkBull)
@@ -764,17 +840,18 @@ if armBullNow
     fvgEBar := na
     // deeper-pullback check, locked in on the sweep bar just like zLvl itself:
     // is there a still-untaken pool below the level that just got swept?
-    pendDeeperLvl := useDeeperGuard ? f_deeperPool(1, zLvl, deeperGuardAtr * atr, pdh, pdl, pwh, pwl, lastSessHi, lastSessLo, asiaH, asiaL) : na
+    pendDeeperLvl := useDeeperGuard ? f_deeperPool(1, zLvl, deeperGuardAtr * atr, pdh, pdl, pwh, pwl, lastSessHi, lastSessLo, asiaH, asiaL, pmh, pml) : na
     // arm-time confluence, locked in on the sweep bar
-    int aS = ((usePoolPD and f_swLo(pdl)) or (usePoolPW and f_swLo(pwl)) or (usePoolCRT and f_swLo(h4L))) ? 2 : 1
+    int aS = ((usePoolPD and f_swLo(pdl)) or (usePoolPW and f_swLo(pwl)) or (usePoolPM and f_swLo(pml)) or (usePoolCRT and f_swLo(h4L))) ? 2 : 1
     aS += (lastSessPhase == "Accum" or (lastSessPhase == "Manip" and lastSessDir == 1)) ? 1 : 0
     aS += smtBull ? 1 : 0
     aS += oteOkBull ? 1 : 0
     aS += rsiBullDiv ? 1 : 0
-    aS += volClimax ? 1 : 0
+    aS += isMajorSweepVol ? 1 : 0
     aS += low < vwapLo ? 1 : 0        // swept OUTSIDE value area — failed auction below
     aS += not tookPDH ? 1 : 0         // daily draw above still untaken — magnet in trade direction
     armScore := aS
+    pendMajorVol := isMajorSweepVol
 if armBearNow
     pendDir := -1
     zLvl := swpHiPrice
@@ -783,16 +860,17 @@ if armBearNow
     fvgETop := na
     fvgEBot := na
     fvgEBar := na
-    pendDeeperLvl := useDeeperGuard ? f_deeperPool(-1, zLvl, deeperGuardAtr * atr, pdh, pdl, pwh, pwl, lastSessHi, lastSessLo, asiaH, asiaL) : na
-    int aS = ((usePoolPD and f_swHi(pdh)) or (usePoolPW and f_swHi(pwh)) or (usePoolCRT and f_swHi(h4H))) ? 2 : 1
+    pendDeeperLvl := useDeeperGuard ? f_deeperPool(-1, zLvl, deeperGuardAtr * atr, pdh, pdl, pwh, pwl, lastSessHi, lastSessLo, asiaH, asiaL, pmh, pml) : na
+    int aS = ((usePoolPD and f_swHi(pdh)) or (usePoolPW and f_swHi(pwh)) or (usePoolPM and f_swHi(pmh)) or (usePoolCRT and f_swHi(h4H))) ? 2 : 1
     aS += (lastSessPhase == "Accum" or (lastSessPhase == "Manip" and lastSessDir == -1)) ? 1 : 0
     aS += smtBear ? 1 : 0
     aS += oteOkBear ? 1 : 0
     aS += rsiBearDiv ? 1 : 0
-    aS += volClimax ? 1 : 0
+    aS += isMajorSweepVol ? 1 : 0
     aS += high > vwapUp ? 1 : 0       // swept OUTSIDE value area — failed auction above
     aS += not tookPDL ? 1 : 0         // daily draw below still untaken — magnet in trade direction
     armScore := aS
+    pendMajorVol := isMajorSweepVol
 // capture the FIRST displacement FVG after the sweep (dispUp[1]/dispDn[1] =
 // the FVG's middle candle was a true displacement body, not drift) and the
 // structure shift. fvgETop is always the zone's upper price, fvgEBot the lower.
@@ -921,6 +999,8 @@ if barstate.isconfirmed
                 t := pdh
             if not na(pwh) and pwh > eP + minTPdist and (na(t) or pwh < t)
                 t := pwh
+            if not na(pmh) and pmh > eP + minTPdist and (na(t) or pmh < t)
+                t := pmh
             if not na(lastSessHi) and lastSessHi > eP + minTPdist and (na(t) or lastSessHi < t)
                 t := lastSessHi
             if not na(asiaH) and asiaH > eP + minTPdist and (na(t) or asiaH < t)
@@ -934,6 +1014,8 @@ if barstate.isconfirmed
                 t := pdl
             if not na(pwl) and pwl < eP - minTPdist and (na(t) or pwl > t)
                 t := pwl
+            if not na(pml) and pml < eP - minTPdist and (na(t) or pml > t)
+                t := pml
             if not na(lastSessLo) and lastSessLo < eP - minTPdist and (na(t) or lastSessLo > t)
                 t := lastSessLo
             if not na(asiaL) and asiaL < eP - minTPdist and (na(t) or asiaL > t)
@@ -967,6 +1049,13 @@ plot(drawLevels and usePoolPD ? pdh : na, "PDH", color.new(colBear, 40),    1, p
 plot(drawLevels and usePoolPD ? pdl : na, "PDL", color.new(colBull, 40),  1, plot.style_linebr)
 plot(drawLevels and usePoolPW ? pwh : na, "PWH", color.new(color.orange, 30), 1, plot.style_linebr)
 plot(drawLevels and usePoolPW ? pwl : na, "PWL", color.new(color.orange, 30), 1, plot.style_linebr)
+plot(drawLevels and usePoolPM ? pmh : na, "PMH", color.new(color.purple, 20), 2, plot.style_linebr)
+plot(drawLevels and usePoolPM ? pml : na, "PML", color.new(color.purple, 20), 2, plot.style_linebr)
+
+// Daily / Weekly / Monthly open — informational reference line, not a pool
+plot(showOpens ? dOpenV : na, "Day Open",   color.new(color.gray, 50),   1, plot.style_linebr)
+plot(showOpens ? wOpenV : na, "Week Open",  color.new(color.orange, 50), 1, plot.style_linebr)
+plot(showOpens ? mOpenV : na, "Month Open", color.new(color.purple, 50), 1, plot.style_linebr)
 plot(drawLevels and usePoolSess ? lastSessHi : na, "Last H", color.new(color.gray, 20), 1, plot.style_linebr)
 plot(drawLevels and usePoolSess ? lastSessLo : na, "Last L", color.new(color.gray, 20), 1, plot.style_linebr)
 
@@ -983,6 +1072,11 @@ var label lblPDH = na
 var label lblPDL = na
 var label lblPWH = na
 var label lblPWL = na
+var label lblPMH = na
+var label lblPML = na
+var label lblDOpen = na
+var label lblWOpen = na
+var label lblMOpen = na
 var label lblLastH = na
 var label lblLastL = na
 var label lblAsiaH = na
@@ -1000,6 +1094,8 @@ if barstate.islast
     int tPDL  = f_touches(pdl, srTol * atr, srLook)
     int tPWH  = f_touches(pwh, srTol * atr, srLook)
     int tPWL  = f_touches(pwl, srTol * atr, srLook)
+    int tPMH  = f_touches(pmh, srTol * atr, srLook)
+    int tPML  = f_touches(pml, srTol * atr, srLook)
     int tLstH = f_touches(lastSessHi, srTol * atr, srLook)
     int tLstL = f_touches(lastSessLo, srTol * atr, srLook)
     int tAsH  = f_touches(asiaH, srTol * atr, srLook)
@@ -1024,6 +1120,26 @@ if barstate.islast
         label.delete(lblPWL)
     if drawLevels and usePoolPW and not na(pwl)
         lblPWL := label.new(xT, pwl, f_lvlTxt("PWL", tPWL, srTouches), style = label.style_label_left, color = color.new(colBull, 100), textcolor = color.new(colBull, 10), size = size.tiny)
+    if not na(lblPMH)
+        label.delete(lblPMH)
+    if drawLevels and usePoolPM and not na(pmh)
+        lblPMH := label.new(xT, pmh, f_lvlTxt("PMH", tPMH, srTouches), style = label.style_label_left, color = color.new(color.purple, 90), textcolor = color.new(color.purple, 5), size = size.tiny)
+    if not na(lblPML)
+        label.delete(lblPML)
+    if drawLevels and usePoolPM and not na(pml)
+        lblPML := label.new(xT, pml, f_lvlTxt("PML", tPML, srTouches), style = label.style_label_left, color = color.new(color.purple, 90), textcolor = color.new(color.purple, 5), size = size.tiny)
+    if not na(lblDOpen)
+        label.delete(lblDOpen)
+    if showOpens and not na(dOpenV)
+        lblDOpen := label.new(xT, dOpenV, "D Open", style = label.style_label_left, color = color.new(color.gray, 90), textcolor = color.new(color.gray, 5), size = size.tiny)
+    if not na(lblWOpen)
+        label.delete(lblWOpen)
+    if showOpens and not na(wOpenV)
+        lblWOpen := label.new(xT, wOpenV, "W Open", style = label.style_label_left, color = color.new(color.orange, 90), textcolor = color.new(color.orange, 5), size = size.tiny)
+    if not na(lblMOpen)
+        label.delete(lblMOpen)
+    if showOpens and not na(mOpenV)
+        lblMOpen := label.new(xT, mOpenV, "M Open", style = label.style_label_left, color = color.new(color.purple, 90), textcolor = color.new(color.purple, 5), size = size.tiny)
     if not na(lblLastH)
         label.delete(lblLastH)
     if drawLevels and usePoolSess and not na(lastSessHi)
@@ -1118,14 +1234,29 @@ var array<box> demOBZones  = array.new<box>()
 var array<box> supOBZones  = array.new<box>()
 var array<box> demFVGZones = array.new<box>()
 var array<box> supFVGZones = array.new<box>()
+// HTF FVGs: own small arrays per timeframe × direction (htfFvgMaxKeep each) —
+// same split as demFVGZones/supFVGZones so mitigation direction never needs a
+// parallel tag array. No age-based eviction (zoneMaxAge is chart-timeframe-
+// scaled and would age a 4H gap out too fast on a low chart timeframe) — the
+// small FIFO cap plus mitigation-on-fill is the only eviction here.
+var array<box> h1FvgDemZones = array.new<box>()
+var array<box> h1FvgSupZones = array.new<box>()
+var array<box> h4FvgDemZones = array.new<box>()
+var array<box> h4FvgSupZones = array.new<box>()
 if showOB and obBull
     if demOBZones.size() >= obMaxKeep
         box.delete(demOBZones.shift())
-    demOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(colBull, 20), bgcolor = color.new(colBull, 70), border_width = 1, border_style = line.style_solid, text = "OB DEMAND", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
+    bool   obHiD = showOBScore and obIsHPZ
+    color  obColD = obHiD ? HPZ_BULL : colBull
+    string obTxtD = "OB DEMAND" + (showOBScore ? " " + str.tostring(obScore, "#") + "%" + (obIsHPZ ? " ★HPZ" : "") : "")
+    demOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(obColD, 20), bgcolor = color.new(obColD, 70), border_width = obHiD ? 2 : 1, border_style = line.style_solid, text = obTxtD, text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
 if showOB and obBear
     if supOBZones.size() >= obMaxKeep
         box.delete(supOBZones.shift())
-    supOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(colBear, 20), bgcolor = color.new(colBear, 70), border_width = 1, border_style = line.style_solid, text = "OB SUPPLY", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
+    bool   obHiS = showOBScore and obIsHPZ
+    color  obColS = obHiS ? HPZ_BEAR : colBear
+    string obTxtS = "OB SUPPLY" + (showOBScore ? " " + str.tostring(obScore, "#") + "%" + (obIsHPZ ? " ★HPZ" : "") : "")
+    supOBZones.push(box.new(bar_index - 1, high[1], bar_index + 2, low[1], border_color = color.new(obColS, 20), bgcolor = color.new(obColS, 70), border_width = obHiS ? 2 : 1, border_style = line.style_solid, text = obTxtS, text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
 if showFVG and fvgBull
     if demFVGZones.size() >= fvgMaxKeep
         box.delete(demFVGZones.shift())
@@ -1134,6 +1265,22 @@ if showFVG and fvgBear
     if supFVGZones.size() >= fvgMaxKeep
         box.delete(supFVGZones.shift())
     supFVGZones.push(box.new(bar_index - 2, low[2], bar_index + 2, high, border_color = color.new(colBear, 20), bgcolor = color.new(colBear, 78), border_width = 1, border_style = line.style_solid, text = "FVG SUPPLY", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
+if showHtfFVG and newH1Bar and fvgBull1H
+    if h1FvgDemZones.size() >= htfFvgMaxKeep
+        box.delete(h1FvgDemZones.shift())
+    h1FvgDemZones.push(box.new(bar_index - 1, h1L1, bar_index + 2, h1H3, border_color = color.new(colBull, 20), bgcolor = color.new(colBull, 82), border_width = 1, border_style = line.style_dashed, text = "1H FVG", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
+if showHtfFVG and newH1Bar and fvgBear1H
+    if h1FvgSupZones.size() >= htfFvgMaxKeep
+        box.delete(h1FvgSupZones.shift())
+    h1FvgSupZones.push(box.new(bar_index - 1, h1L3, bar_index + 2, h1H1, border_color = color.new(colBear, 20), bgcolor = color.new(colBear, 82), border_width = 1, border_style = line.style_dashed, text = "1H FVG", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
+if showHtfFVG and newH4Bar and fvgBull4H
+    if h4FvgDemZones.size() >= htfFvgMaxKeep
+        box.delete(h4FvgDemZones.shift())
+    h4FvgDemZones.push(box.new(bar_index - 1, h4L1, bar_index + 2, h4H3, border_color = color.new(colBull, 20), bgcolor = color.new(colBull, 82), border_width = 2, border_style = line.style_dashed, text = "4H FVG", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
+if showHtfFVG and newH4Bar and fvgBear4H
+    if h4FvgSupZones.size() >= htfFvgMaxKeep
+        box.delete(h4FvgSupZones.shift())
+    h4FvgSupZones.push(box.new(bar_index - 1, h4L3, bar_index + 2, h4H1, border_color = color.new(colBear, 20), bgcolor = color.new(colBear, 82), border_width = 2, border_style = line.style_dashed, text = "4H FVG", text_color = color.new(color.white, 0), text_size = size.tiny, text_halign = text.align_center, text_valign = text.align_center))
 // Breaker blocks: an OB that gets genuinely CLOSED THROUGH (not just aged out)
 // flips into support/resistance in the opposite direction — real ICT concept.
 // Own bounded arrays + own aging/mitigation loop below (deleted once price
@@ -1194,6 +1341,38 @@ if supFVGZones.size() > 0
         if close > box.get_top(bs) or bar_index - box.get_left(bs) > zoneMaxAge
             box.delete(bs)
             supFVGZones.remove(i)
+        else
+            box.set_right(bs, bar_index + 2)
+if h1FvgDemZones.size() > 0
+    for i = h1FvgDemZones.size() - 1 to 0
+        box bd = h1FvgDemZones.get(i)
+        if close < box.get_bottom(bd)
+            box.delete(bd)
+            h1FvgDemZones.remove(i)
+        else
+            box.set_right(bd, bar_index + 2)
+if h1FvgSupZones.size() > 0
+    for i = h1FvgSupZones.size() - 1 to 0
+        box bs = h1FvgSupZones.get(i)
+        if close > box.get_top(bs)
+            box.delete(bs)
+            h1FvgSupZones.remove(i)
+        else
+            box.set_right(bs, bar_index + 2)
+if h4FvgDemZones.size() > 0
+    for i = h4FvgDemZones.size() - 1 to 0
+        box bd = h4FvgDemZones.get(i)
+        if close < box.get_bottom(bd)
+            box.delete(bd)
+            h4FvgDemZones.remove(i)
+        else
+            box.set_right(bd, bar_index + 2)
+if h4FvgSupZones.size() > 0
+    for i = h4FvgSupZones.size() - 1 to 0
+        box bs = h4FvgSupZones.get(i)
+        if close > box.get_top(bs)
+            box.delete(bs)
+            h4FvgSupZones.remove(i)
         else
             box.set_right(bs, bar_index + 2)
 
@@ -1440,7 +1619,7 @@ if showDash and barstate.islast
     fStr =(requireBias ? "B" + f_chk(biasBull or biasBear) + " " : "") + (requireChoch ? "C" + f_chk(chochArmBull or chochArmBear) + " " : "") + (requireSMT ? "SMT" + f_chk(smtBull or smtBear) + " " : "") + (useStrongSR ? "SR" + f_chk(strongLo or strongHi) + " " : "") + (requirePress ? "P" + f_chk(pressBull or pressBear) + " " : "") + (requireOTE ? "OTE" + f_chk(oteOkBull or oteOkBear) : "") + (useDeeperGuard ? " DPG" : "")
     fStr := fStr == "" ? "soft (none)" : fStr
     pendTxt = not strictICT ? "⌛ wait retest" : na(fvgEBar) and not confStruct ? "⌛ wait displacement" : na(fvgEBar) ? "⌛ wait FVG" : not confStruct ? "⌛ wait CISD/MSS" : "⌛ wait FVG retest"
-    verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? pendTxt + (pendDir == 1 ? " ▲" : " ▼") : "WAIT"
+    verdict = trigBull ? "⚑ BUY" : trigBear ? "⚑ SELL" : inTrade ? (dir == 1 ? "● LONG" : "● SHORT") : pendDir != 0 ? pendTxt + (pendDir == 1 ? " ▲" : " ▼") + (pendMajorVol ? " [MAJOR]" : " [minor]") : "WAIT"
     verdictC= trigBull ? color.new(colBull, 0) : trigBear ? color.new(colBear, 0) : inTrade ? color.new(color.blue, 10) : pendDir != 0 ? color.new(color.orange, 20) : color.new(color.gray, 30)
     table.cell(dash, 0, 0, "APEX SESSION SMC (adaptive + DPG)", text_color = cW, bgcolor = color.new(color.blue, 10), text_size = size.small)
     table.merge_cells(dash, 0, 0, 1, 0)
